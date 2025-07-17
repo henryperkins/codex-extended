@@ -21,6 +21,7 @@ import {
   getApiKey,
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
+import { fetchUrl, searchWeb } from "../fetch-url.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -113,8 +114,51 @@ const shellFunctionTool: FunctionTool = {
 };
 
 const localShellTool: Tool = {
-  //@ts-expect-error - waiting on sdk
+  // @ts-expect-error – awaiting SDK update that includes `local_shell`
   type: "local_shell",
+};
+
+// ---------------------------------------------------------------------------
+// Web access helper tools – available to both Azure and standard OpenAI
+// accounts. They are implemented as regular function-tools so that they work
+// even on providers that do not yet expose the native `web_search` capability
+// via the Responses API (e.g. Azure OpenAI as of 2025-03-01-preview).
+// ---------------------------------------------------------------------------
+
+const fetchUrlTool: FunctionTool = {
+  type: "function",
+  name: "fetch_url",
+  description: "Fetches the content of a URL and returns it as text.",
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description: "The URL to fetch",
+      },
+    },
+    required: ["url"],
+    additionalProperties: false,
+  },
+};
+
+const webSearchTool: FunctionTool = {
+  type: "function",
+  name: "web_search",
+  description: "Searches the web for information and returns relevant results.",
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "The search query",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
 };
 
 export class AgentLoop {
@@ -500,6 +544,56 @@ export class AgentLoop {
       if (additionalItemsFromExec) {
         additionalItems.push(...additionalItemsFromExec);
       }
+    } else if (name === "fetch_url") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const url = (args as any).url as string | undefined;
+
+        if (!url) {
+          outputItem.output = JSON.stringify({
+            output: "Error: URL is required",
+            metadata: { error: true },
+          });
+        } else {
+          const content = await fetchUrl(url);
+          outputItem.output = JSON.stringify({
+            output: content.slice(0, 16 * 1024), // cap at 16 KB to avoid bloating transcript
+            metadata: { ok: true, url },
+          });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "unknown");
+        outputItem.output = JSON.stringify({
+          output: `Error fetching URL: ${message}`,
+          metadata: { error: true },
+        });
+      }
+    } else if (name === "web_search") {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const query = (args as any).query as string | undefined;
+
+        if (!query) {
+          outputItem.output = JSON.stringify({
+            output: "Error: Search query is required",
+            metadata: { error: true },
+          });
+        } else {
+          const results = await searchWeb(query);
+          outputItem.output = JSON.stringify({
+            output: results,
+            metadata: { ok: true, query },
+          });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error ?? "unknown");
+        outputItem.output = JSON.stringify({
+          output: `Error searching web: ${message}`,
+          metadata: { error: true },
+        });
+      }
     }
 
     return [outputItem, ...additionalItems];
@@ -672,9 +766,19 @@ export class AgentLoop {
       // `disableResponseStorage === true`.
       let transcriptPrefixLen = 0;
 
-      let tools: Array<Tool> = [shellFunctionTool];
+      // -------------------------------------------------------------------
+      // Expose tool set depending on the active model/provider.  For Codex
+      // models we use the proprietary `local_shell` tool.  For all other
+      // providers we rely on the standard `shell` function.  In both cases we
+      // additionally expose the custom `fetch_url` and `web_search` helpers.
+      // -------------------------------------------------------------------
+
+      let tools: Array<Tool>;
+
       if (this.model.startsWith("codex")) {
-        tools = [localShellTool];
+        tools = [localShellTool, fetchUrlTool, webSearchTool];
+      } else {
+        tools = [shellFunctionTool, fetchUrlTool, webSearchTool];
       }
 
       const stripInternalFields = (
@@ -780,7 +884,7 @@ export class AgentLoop {
                 if (
                   (item as ResponseInputItem).type === "function_call" ||
                   (item as ResponseInputItem).type === "reasoning" ||
-                  //@ts-expect-error - waiting on sdk
+                  // @ts-expect-error – `local_shell_call` missing in SDK union
                   (item as ResponseInputItem).type === "local_shell_call" ||
                   ((item as ResponseInputItem).type === "message" &&
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -874,7 +978,11 @@ export class AgentLoop {
               instructions: mergedInstructions,
               input: turnInput,
               stream: true,
-              parallel_tool_calls: false,
+              // Let the caller decide – default to true when >1 tool is defined.
+              parallel_tool_calls:
+                this.config?.disableParallelTools === true
+                  ? false
+                  : tools.length > 1,
               reasoning,
               ...(this.config.flexMode ? { service_tier: "flex" } : {}),
               ...(this.disableResponseStorage
@@ -1279,7 +1387,11 @@ export class AgentLoop {
                 instructions: mergedInstructions,
                 input: turnInput,
                 stream: true,
-                parallel_tool_calls: false,
+                // Let the caller decide – default to true when >1 tool is defined.
+                parallel_tool_calls:
+                  this.config?.disableParallelTools === true
+                    ? false
+                    : tools.length > 1,
                 reasoning,
                 ...(this.config.flexMode ? { service_tier: "flex" } : {}),
                 ...(this.disableResponseStorage
@@ -1650,13 +1762,13 @@ export class AgentLoop {
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleFunctionCall(item);
         turnInput.push(...result);
-        //@ts-expect-error - waiting on sdk
+        // @ts-expect-error – `local_shell_call` missing in SDK union
       } else if (item.type === "local_shell_call") {
-        //@ts-expect-error - waiting on sdk
+        // @ts-expect-error – `local_shell_call` missing in SDK union
         if (alreadyProcessedResponses.has(item.id)) {
           continue;
         }
-        //@ts-expect-error - waiting on sdk
+        // @ts-expect-error – `local_shell_call` missing in SDK union
         alreadyProcessedResponses.add(item.id);
         // eslint-disable-next-line no-await-in-loop
         const result = await this.handleLocalShellCall(item);

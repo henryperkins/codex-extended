@@ -261,8 +261,13 @@ function convertTools(
       type: "function" as const,
       function: {
         name: tool.name,
-        description: tool.description || undefined,
-        parameters: tool.parameters,
+        description:
+          tool.description && tool.description.length > 1024
+            ? tool.description.slice(0, 1024)
+            : tool.description || undefined,
+        // The ChatCompletionTool schema expects `parameters` to be omitted
+        // rather than set to `null` when absent.
+        parameters: tool.parameters == null ? undefined : tool.parameters,
       },
     }));
 }
@@ -270,22 +275,26 @@ function convertTools(
 const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
   const fullMessages = getFullMessages(input);
   const chatTools = convertTools(input.tools);
-  const webSearchOptions = input.tools?.some(
+  // Enable provider-side web_search only when no custom implementation was supplied.
+  const hasCustomWebSearchFn = input.tools?.some(
     (tool) => tool.type === "function" && tool.name === "web_search",
-  )
-    ? {}
-    : undefined;
+  );
+
+  // Only send provider-side web-search to the first-party OpenAI endpoint.
+  const isAzure =
+    typeof openai.baseURL === "string" &&
+    /\.openai\.azure\.com/i.test(openai.baseURL);
+
+  const webSearchOptions = isAzure || hasCustomWebSearchFn ? undefined : {};
 
   const chatInput: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
     model: input.model,
     messages: fullMessages,
     tools: chatTools,
-    web_search_options: webSearchOptions,
+    ...(webSearchOptions ? { web_search_options: webSearchOptions } : {}),
     temperature: input.temperature,
     top_p: input.top_p,
-    tool_choice: (input.tool_choice === "auto"
-      ? "auto"
-      : input.tool_choice) as OpenAI.Chat.Completions.ChatCompletionCreateParams["tool_choice"],
+    tool_choice: input.tool_choice === undefined ? "auto" : input.tool_choice,
     stream: input.stream || false,
     user: input.user,
     metadata: input.metadata,
