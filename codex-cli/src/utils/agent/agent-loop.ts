@@ -493,7 +493,28 @@ export class AgentLoop {
       : iv.arguments;
     const callId: string = iv.call_id ?? iv.id ?? "";
 
-    const args = parseToolCallArguments(rawArguments ?? "{}");
+    // Parse arguments based on function type
+    let args: unknown = null;
+    if (name === "container.exec" || name === "shell") {
+      // Shell commands need special parsing for cmd/command properties
+      args = parseToolCallArguments(rawArguments ?? "{}");
+    } else if (name === "fetch_url" || name === "web_search") {
+      // Web tools use standard JSON arguments
+      try {
+        args = JSON.parse(rawArguments ?? "{}");
+      } catch (error) {
+        const outputItem: ResponseInputItem.FunctionCallOutput = {
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: `invalid arguments: ${rawArguments}`,
+        };
+        return [outputItem];
+      }
+    } else {
+      // Default to shell command parsing for unknown functions
+      args = parseToolCallArguments(rawArguments ?? "{}");
+    }
+
     log(
       `handleFunctionCall(): name=${
         name ?? "undefined"
@@ -554,6 +575,8 @@ export class AgentLoop {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const url = (args as any).url as string | undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const query = (args as any).query as string | undefined;
 
         if (!url) {
           outputItem.output = JSON.stringify({
@@ -561,8 +584,28 @@ export class AgentLoop {
             metadata: { error: true },
           });
         } else {
-          const result = await fetchUrlStructured(url, this.oai);
-          outputItem.output = JSON.stringify(result);
+          const result = await fetchUrlStructured(url, this.oai, true, query, {
+            provider: this.provider,
+            model: this.model,
+          });
+
+          // Format output based on what was returned
+          let formattedOutput = "";
+          if (result.summary) {
+            formattedOutput += `Summary: ${result.summary}\n\n`;
+          }
+          if (result.metadata.content_type === "extracted") {
+            formattedOutput += `[Content intelligently extracted from ${result.metadata.original_size} bytes to ${result.metadata.processed_size} bytes]\n\n`;
+          }
+          formattedOutput += result.raw || "No content available";
+
+          outputItem.output = JSON.stringify({
+            output: formattedOutput,
+            metadata: {
+              error: false,
+              ...result.metadata,
+            },
+          });
         }
       } catch (error) {
         const message =
@@ -584,7 +627,10 @@ export class AgentLoop {
           });
         } else {
           const result = await searchWebStructured(query);
-          outputItem.output = JSON.stringify(result);
+          outputItem.output = JSON.stringify({
+            output: JSON.stringify(result, null, 2),
+            metadata: { error: false },
+          });
         }
       } catch (error) {
         const message =

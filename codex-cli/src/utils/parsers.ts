@@ -16,14 +16,32 @@ export function parseToolCallOutput(toolCallOutput: string): {
   metadata: ExecOutputMetadata;
 } {
   try {
-    const { output, metadata } = JSON.parse(toolCallOutput);
+    const parsed = JSON.parse(toolCallOutput);
+    const { output, metadata } = parsed;
+
+    // Ensure output is a string
+    if (typeof output !== "string") {
+      log(`Tool call output field is not a string: ${typeof output}`);
+      return {
+        output: toolCallOutput, // Return the raw output as fallback
+        metadata: metadata || { exit_code: 0, duration_seconds: 0 },
+      };
+    }
+
     return {
       output,
-      metadata,
+      metadata: metadata || { exit_code: 0, duration_seconds: 0 },
     };
   } catch (err) {
+    // Provide more specific error information
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    log(`Failed to parse tool call output as JSON: ${errorMessage}`);
+    log(
+      `Raw output: ${toolCallOutput.slice(0, 200)}${toolCallOutput.length > 200 ? "..." : ""}`,
+    );
+
     return {
-      output: `Failed to parse JSON result`,
+      output: `Tool execution failed. Raw output: ${toolCallOutput}`,
       metadata: {
         exit_code: 1,
         duration_seconds: 0,

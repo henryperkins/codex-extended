@@ -9,7 +9,46 @@ import { fetchUrl, searchWeb } from "./fetch-url.js";
 // Token estimation for chunking (roughly 4 chars per token)
 const CHARS_PER_TOKEN = 4;
 const DEFAULT_CHUNK_SIZE_TOKENS = 6000;
-const SYNOPSIS_MODEL = "gpt-35-turbo"; // Cheap model for synopsis generation
+
+// Content size limits - can be overridden via environment variables
+const MAX_RAW_CONTENT_SIZE = parseInt(
+  process.env.CODEX_MAX_FETCH_SIZE || String(4 * 1024),
+); // Default 4KB
+const ENABLE_SMART_EXTRACTION = process.env.CODEX_SMART_EXTRACTION !== "false"; // Default true
+
+// Model configuration for content processing
+export interface ModelConfig {
+  provider?: string;
+  model?: string;
+}
+
+// Get the appropriate model for content extraction based on provider
+function getExtractionModel(config?: ModelConfig): string {
+  // Check environment variable first
+  if (process.env.CODEX_EXTRACTION_MODEL) {
+    return process.env.CODEX_EXTRACTION_MODEL;
+  }
+
+  // Use provider-specific model naming
+  const provider = config?.provider?.toLowerCase();
+  const currentModel = config?.model?.toLowerCase();
+
+  if (provider === "azure") {
+    // Azure: Use gpt-4.1-mini for efficient extraction
+    // Falls back to current model if it's already a mini/nano variant
+    if (currentModel?.includes("mini") || currentModel?.includes("nano")) {
+      return currentModel;
+    }
+    return "gpt-4.1-mini";
+  }
+
+  // For other providers (OpenAI, etc.)
+  if (currentModel?.includes("gpt-4")) {
+    return "gpt-3.5-turbo";
+  }
+
+  return currentModel || "gpt-3.5-turbo";
+}
 
 interface StructuredWebSearchResult {
   id: string;
@@ -33,6 +72,8 @@ interface StructuredFetchResult {
     error?: boolean;
     chunked?: boolean;
     total_chunks?: number;
+    original_size?: number;
+    processed_size?: number;
   };
 }
 
@@ -65,12 +106,77 @@ export function chunkText(
 }
 
 /**
+ * Extract the most relevant content based on context or user query
+ */
+export async function extractRelevantContent(
+  content: string,
+  openaiClient: OpenAI,
+  userQuery?: string,
+  maxTokens: number = 800,
+  modelConfig?: ModelConfig,
+): Promise<string> {
+  try {
+    // If content is already small, return as-is
+    if (content.length < MAX_RAW_CONTENT_SIZE) {
+      return content;
+    }
+
+    // For very large content, take strategic samples
+    const contentLength = content.length;
+    const sampleSize = Math.min(12000, contentLength); // Max 12KB for extraction
+
+    // Take beginning, middle, and end samples
+    const samples: Array<string> = [];
+
+    // Beginning (usually has important metadata/intro)
+    samples.push(content.slice(0, sampleSize / 3));
+
+    // Middle section
+    const middleStart = Math.floor((contentLength - sampleSize / 3) / 2);
+    samples.push(content.slice(middleStart, middleStart + sampleSize / 3));
+
+    // End section (often has conclusions/summaries)
+    samples.push(content.slice(-sampleSize / 3));
+
+    const sampledContent = samples.join("\n\n[...]\n\n");
+
+    const systemPrompt = userQuery
+      ? `Extract the most relevant information from this content that relates to: "${userQuery}". Focus on key facts, data, and insights.`
+      : "Extract the most important and relevant information from this content. Focus on main topics, key facts, and essential details.";
+
+    const response = await openaiClient.chat.completions.create({
+      model: getExtractionModel(modelConfig),
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: `Extract relevant content from:\n\n${sampledContent}`,
+        },
+      ],
+      max_tokens: maxTokens,
+      temperature: 0.3,
+      stream: false,
+    } as ChatCompletionCreateParams);
+
+    const extracted = (response as ChatCompletion).choices[0]?.message?.content;
+    return extracted || content.slice(0, MAX_RAW_CONTENT_SIZE);
+  } catch (error) {
+    // Fallback to simple truncation if extraction fails
+    return content.slice(0, MAX_RAW_CONTENT_SIZE);
+  }
+}
+
+/**
  * Generate a synopsis of content using a cheap model
  */
 export async function generateSynopsis(
   content: string,
   openaiClient: OpenAI,
   maxTokens: number = 150,
+  modelConfig?: ModelConfig,
 ): Promise<string> {
   try {
     // Only summarize if content is substantial
@@ -82,7 +188,7 @@ export async function generateSynopsis(
     const truncatedContent = content.slice(0, 8000);
 
     const response = await openaiClient.chat.completions.create({
-      model: SYNOPSIS_MODEL,
+      model: getExtractionModel(modelConfig),
       messages: [
         {
           role: "system",
@@ -188,6 +294,8 @@ export async function fetchUrlStructured(
   url: string,
   openaiClient?: OpenAI,
   enableSynopsis: boolean = true,
+  userQuery?: string,
+  modelConfig?: ModelConfig,
 ): Promise<StructuredFetchResult> {
   try {
     const content = await fetchUrl(url);
@@ -196,32 +304,78 @@ export async function fetchUrlStructured(
     const titleMatch = content.match(/<title[^>]*>([^<]+)<\/title>/i);
     const title = titleMatch?.[1]?.trim();
 
-    // Determine if we need to chunk
+    // Determine content handling strategy
     const estimatedTokens = content.length / CHARS_PER_TOKEN;
+    const isLargeContent = content.length > MAX_RAW_CONTENT_SIZE;
     const needsChunking = estimatedTokens > DEFAULT_CHUNK_SIZE_TOKENS;
 
     let synopsis: string | undefined;
     let chunks: Array<string> | undefined;
+    let processedContent: string;
 
-    if (needsChunking) {
+    if (isLargeContent && openaiClient && ENABLE_SMART_EXTRACTION) {
+      // For large content, use intelligent extraction
+      processedContent = await extractRelevantContent(
+        content,
+        openaiClient,
+        userQuery,
+        800,
+        modelConfig,
+      );
+
+      // Generate synopsis of the extracted content
+      if (enableSynopsis) {
+        synopsis = await generateSynopsis(
+          processedContent,
+          openaiClient,
+          150,
+          modelConfig,
+        );
+      }
+    } else if (isLargeContent) {
+      // If smart extraction is disabled or no OpenAI client, just truncate
+      processedContent = content.slice(0, MAX_RAW_CONTENT_SIZE);
+
+      if (openaiClient && enableSynopsis) {
+        synopsis = await generateSynopsis(
+          processedContent,
+          openaiClient,
+          150,
+          modelConfig,
+        );
+      }
+    } else if (needsChunking) {
+      // For medium content, provide chunks
       chunks = chunkText(content);
+      processedContent = content.slice(0, MAX_RAW_CONTENT_SIZE);
 
       // Generate synopsis if we have an OpenAI client and it's enabled
       if (openaiClient && enableSynopsis) {
-        synopsis = await generateSynopsis(content, openaiClient);
+        synopsis = await generateSynopsis(
+          content,
+          openaiClient,
+          150,
+          modelConfig,
+        );
       }
+    } else {
+      // Small content - return as-is
+      processedContent = content;
     }
 
     return {
       summary: synopsis,
       chunks: chunks,
-      raw: content.slice(0, 16 * 1024), // Cap at 16KB as before
+      raw: processedContent,
       metadata: {
         ok: true,
         url,
         title: title || undefined,
         chunked: needsChunking,
         total_chunks: chunks?.length,
+        content_type: isLargeContent ? "extracted" : "full",
+        original_size: content.length,
+        processed_size: processedContent.length,
       },
     };
   } catch (error) {
