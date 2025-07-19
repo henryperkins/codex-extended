@@ -21,7 +21,6 @@ import {
   getApiKey,
   AZURE_OPENAI_API_VERSION,
 } from "../config.js";
-import { fetchUrl, searchWeb } from "../fetch-url.js";
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
@@ -31,6 +30,11 @@ import {
   setCurrentModel,
   setSessionId,
 } from "../session.js";
+import {
+  fetchUrlStructured,
+  searchWebStructured,
+  truncateForAzure,
+} from "../structured-helpers.js";
 import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -128,7 +132,8 @@ const localShellTool: Tool = {
 const fetchUrlTool: FunctionTool = {
   type: "function",
   name: "fetch_url",
-  description: "Fetches the content of a URL and returns it as text.",
+  description:
+    "Fetches the content of a URL and returns structured data with optional synopsis and chunking for large pages.",
   strict: false,
   parameters: {
     type: "object",
@@ -146,7 +151,8 @@ const fetchUrlTool: FunctionTool = {
 const webSearchTool: FunctionTool = {
   type: "function",
   name: "web_search",
-  description: "Searches the web for information and returns relevant results.",
+  description:
+    "Searches the web and returns structured results with URLs, titles, and snippets.",
   strict: false,
   parameters: {
     type: "object",
@@ -555,11 +561,8 @@ export class AgentLoop {
             metadata: { error: true },
           });
         } else {
-          const content = await fetchUrl(url);
-          outputItem.output = JSON.stringify({
-            output: content.slice(0, 16 * 1024), // cap at 16 KB to avoid bloating transcript
-            metadata: { ok: true, url },
-          });
+          const result = await fetchUrlStructured(url, this.oai);
+          outputItem.output = JSON.stringify(result);
         }
       } catch (error) {
         const message =
@@ -580,11 +583,8 @@ export class AgentLoop {
             metadata: { error: true },
           });
         } else {
-          const results = await searchWeb(query);
-          outputItem.output = JSON.stringify({
-            output: results,
-            metadata: { ok: true, query },
-          });
+          const result = await searchWebStructured(query);
+          outputItem.output = JSON.stringify(result);
         }
       } catch (error) {
         const message =
@@ -775,10 +775,25 @@ export class AgentLoop {
 
       let tools: Array<Tool>;
 
+      // Apply Azure-specific description truncation if needed
+      const isAzure = this.provider.toLowerCase() === "azure";
+      const azureFetchTool = isAzure
+        ? {
+            ...fetchUrlTool,
+            description: truncateForAzure(fetchUrlTool.description || ""),
+          }
+        : fetchUrlTool;
+      const azureSearchTool = isAzure
+        ? {
+            ...webSearchTool,
+            description: truncateForAzure(webSearchTool.description || ""),
+          }
+        : webSearchTool;
+
       if (this.model.startsWith("codex")) {
-        tools = [localShellTool, fetchUrlTool, webSearchTool];
+        tools = [localShellTool, azureFetchTool, azureSearchTool];
       } else {
-        tools = [shellFunctionTool, fetchUrlTool, webSearchTool];
+        tools = [shellFunctionTool, azureFetchTool, azureSearchTool];
       }
 
       const stripInternalFields = (
@@ -978,11 +993,8 @@ export class AgentLoop {
               instructions: mergedInstructions,
               input: turnInput,
               stream: true,
-              // Let the caller decide – default to true when >1 tool is defined.
-              parallel_tool_calls:
-                this.config?.disableParallelTools === true
-                  ? false
-                  : tools.length > 1,
+              // Default to true when >1 tool is defined.
+              parallel_tool_calls: tools.length > 1,
               reasoning,
               ...(this.config.flexMode ? { service_tier: "flex" } : {}),
               ...(this.disableResponseStorage
@@ -1387,11 +1399,8 @@ export class AgentLoop {
                 instructions: mergedInstructions,
                 input: turnInput,
                 stream: true,
-                // Let the caller decide – default to true when >1 tool is defined.
-                parallel_tool_calls:
-                  this.config?.disableParallelTools === true
-                    ? false
-                    : tools.length > 1,
+                // Default to true when >1 tool is defined.
+                parallel_tool_calls: tools.length > 1,
                 reasoning,
                 ...(this.config.flexMode ? { service_tier: "flex" } : {}),
                 ...(this.disableResponseStorage
