@@ -7,13 +7,20 @@
  * request fails or the response status code is not within the 2xx range.
  */
 export async function fetchUrl(url: string): Promise<string> {
-  const res = await fetch(url);
+  try {
+    const res = await fetch(url);
 
-  if (!res.ok) {
-    throw new Error(`GET ${url} → ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      throw new Error(`GET ${url} → ${res.status} ${res.statusText}`);
+    }
+
+    return res.text();
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error("Network access may be restricted. Unable to fetch URL.");
+    }
+    throw error;
   }
-
-  return res.text();
 }
 
 /*
@@ -70,19 +77,34 @@ async function searchWebBrave(query: string, apiKey: string): Promise<string> {
     query,
   )}`;
 
-  const res = await fetch(url, {
-    headers: {
-      "X-Subscription-Token": apiKey,
-      "Accept": "application/json",
-    },
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "X-Subscription-Token": apiKey,
+        "Accept": "application/json",
+      },
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error(
+        "Network access may be restricted. Unable to reach Brave Search API.",
+      );
+    }
+    throw error;
+  }
 
   if (!res.ok) {
     throw new Error(`Brave Search API error: ${res.status}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (error) {
+    throw new Error(`Failed to parse JSON response from Brave Search API`);
+  }
 
   let results = `Search results for: "${query}"\n\n`;
 
@@ -107,17 +129,32 @@ async function searchWebDuckDuckGo(query: string): Promise<string> {
     query,
   )}&format=json&t=codex-cli`;
 
-  const res = await fetch(url, {
-    // A custom UA avoids generic bot blocking and makes debugging easier.
-    headers: { "User-Agent": "codex-cli-web-search" },
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      // A custom UA avoids generic bot blocking and makes debugging easier.
+      headers: { "User-Agent": "codex-cli-web-search" },
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error(
+        "Network access may be restricted. Unable to reach DuckDuckGo API.",
+      );
+    }
+    throw error;
+  }
 
   if (!res.ok) {
     throw new Error(`DuckDuckGo API error: ${res.status}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (error) {
+    throw new Error(`Failed to parse JSON response from DuckDuckGo API`);
+  }
 
   let results = `Search results for: "${query}"\n\n`;
 
@@ -177,14 +214,29 @@ async function searchWebSerp(query: string, apiKey: string): Promise<string> {
     query,
   )}&api_key=${apiKey}`;
 
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error(
+        "Network access may be restricted. Unable to reach SerpAPI.",
+      );
+    }
+    throw error;
+  }
 
   if (!res.ok) {
     throw new Error(`SerpAPI error: ${res.status}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (error) {
+    throw new Error(`Failed to parse JSON response from SerpAPI`);
+  }
 
   let results = `Search results for: "${query}"\n\n`;
 
@@ -204,18 +256,33 @@ async function searchWebBing(query: string, apiKey: string): Promise<string> {
   const endpoint = "https://api.bing.microsoft.com/v7.0/search";
   const url = `${endpoint}?q=${encodeURIComponent(query)}&count=5`;
 
-  const res = await fetch(url, {
-    headers: {
-      "Ocp-Apim-Subscription-Key": apiKey,
-    },
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "Ocp-Apim-Subscription-Key": apiKey,
+      },
+    });
+  } catch (error) {
+    if (error instanceof TypeError && error.message.includes("fetch")) {
+      throw new Error(
+        "Network access may be restricted. Unable to reach Bing Search API.",
+      );
+    }
+    throw error;
+  }
 
   if (!res.ok) {
     throw new Error(`Bing Search API error: ${res.status}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data: any = await res.json();
+  let data: any;
+  try {
+    data = await res.json();
+  } catch (error) {
+    throw new Error(`Failed to parse JSON response from Bing Search API`);
+  }
 
   let results = `Search results for: "${query}"\n\n`;
 
