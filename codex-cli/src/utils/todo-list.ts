@@ -9,7 +9,7 @@ export interface TodoItem {
   createdAt: number;
   updatedAt: number;
   parentId?: string; // For subtasks
-  dependencies?: string[]; // IDs of tasks that must be completed first
+  dependencies?: Array<string>; // IDs of tasks that must be completed first
   notes?: string;
   completedAt?: number;
 }
@@ -33,7 +33,7 @@ export class TodoList {
     this.filePath = options.filePath;
     this.autoSaveEnabled = options.autoSave ?? true;
     this.maxItems = options.maxItems ?? 100;
-    
+
     if (this.filePath && existsSync(this.filePath)) {
       this.load();
     }
@@ -45,7 +45,7 @@ export class TodoList {
   async add(
     content: string,
     priority: TodoItem["priority"] = "medium",
-    parentId?: string
+    parentId?: string,
   ): Promise<string> {
     if (this.todos.size >= this.maxItems) {
       throw new Error(`Maximum number of todos (${this.maxItems}) reached`);
@@ -53,7 +53,7 @@ export class TodoList {
 
     const id = randomUUID();
     const now = Date.now();
-    
+
     const todo: TodoItem = {
       id,
       content,
@@ -61,11 +61,11 @@ export class TodoList {
       priority,
       createdAt: now,
       updatedAt: now,
-      parentId
+      parentId,
     };
 
     this.todos.set(id, todo);
-    
+
     if (this.autoSaveEnabled) {
       await this.save();
     }
@@ -79,24 +79,29 @@ export class TodoList {
   async updateStatus(
     id: string,
     status: TodoItem["status"],
-    notes?: string
+    notes?: string,
   ): Promise<boolean> {
     const todo = this.todos.get(id);
-    if (!todo) return false;
+    if (!todo) {
+      return false;
+    }
 
     // Check dependencies before marking as in_progress or completed
-    if ((status === "in_progress" || status === "completed") && todo.dependencies) {
+    if (
+      (status === "in_progress" || status === "completed") &&
+      todo.dependencies
+    ) {
       const blockers = this.getBlockingDependencies(id);
       if (blockers.length > 0) {
         throw new Error(
-          `Cannot update status. Task is blocked by: ${blockers.map(b => b.content).join(", ")}`
+          `Cannot update status. Task is blocked by: ${blockers.map((b) => b.content).join(", ")}`,
         );
       }
     }
 
     todo.status = status;
     todo.updatedAt = Date.now();
-    
+
     if (notes) {
       todo.notes = (todo.notes ? todo.notes + "\n" : "") + notes;
     }
@@ -115,13 +120,14 @@ export class TodoList {
   /**
    * Get tasks by status
    */
-  getByStatus(status: TodoItem["status"]): TodoItem[] {
+  getByStatus(status: TodoItem["status"]): Array<TodoItem> {
     return Array.from(this.todos.values())
-      .filter(todo => todo.status === status)
+      .filter((todo) => todo.status === status)
       .sort((a, b) => {
         // Sort by priority first, then by creation time
         const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+        const priorityDiff =
+          priorityOrder[a.priority] - priorityOrder[b.priority];
         return priorityDiff !== 0 ? priorityDiff : a.createdAt - b.createdAt;
       });
   }
@@ -129,14 +135,18 @@ export class TodoList {
   /**
    * Get next actionable tasks (not blocked by dependencies)
    */
-  getActionableTasks(): TodoItem[] {
+  getActionableTasks(): Array<TodoItem> {
     return Array.from(this.todos.values())
-      .filter(todo => {
-        if (todo.status !== "pending") return false;
-        if (!todo.dependencies || todo.dependencies.length === 0) return true;
-        
+      .filter((todo) => {
+        if (todo.status !== "pending") {
+          return false;
+        }
+        if (!todo.dependencies || todo.dependencies.length === 0) {
+          return true;
+        }
+
         // Check if all dependencies are completed
-        return todo.dependencies.every(depId => {
+        return todo.dependencies.every((depId) => {
           const dep = this.todos.get(depId);
           return dep && dep.status === "completed";
         });
@@ -150,13 +160,15 @@ export class TodoList {
   /**
    * Get blocking dependencies for a task
    */
-  getBlockingDependencies(id: string): TodoItem[] {
+  getBlockingDependencies(id: string): Array<TodoItem> {
     const todo = this.todos.get(id);
-    if (!todo || !todo.dependencies) return [];
+    if (!todo || !todo.dependencies) {
+      return [];
+    }
 
     return todo.dependencies
-      .map(depId => this.todos.get(depId))
-      .filter(dep => dep && dep.status !== "completed") as TodoItem[];
+      .map((depId) => this.todos.get(depId))
+      .filter((dep) => dep && dep.status !== "completed") as Array<TodoItem>;
   }
 
   /**
@@ -165,22 +177,26 @@ export class TodoList {
   async addDependency(taskId: string, dependsOnId: string): Promise<boolean> {
     const task = this.todos.get(taskId);
     const dependency = this.todos.get(dependsOnId);
-    
-    if (!task || !dependency) return false;
-    
+
+    if (!task || !dependency) {
+      return false;
+    }
+
     // Prevent circular dependencies
     if (this.wouldCreateCircularDependency(taskId, dependsOnId)) {
-      throw new Error("Cannot add dependency: would create circular dependency");
+      throw new Error(
+        "Cannot add dependency: would create circular dependency",
+      );
     }
 
     if (!task.dependencies) {
       task.dependencies = [];
     }
-    
+
     if (!task.dependencies.includes(dependsOnId)) {
       task.dependencies.push(dependsOnId);
       task.updatedAt = Date.now();
-      
+
       if (this.autoSaveEnabled) {
         await this.save();
       }
@@ -192,22 +208,31 @@ export class TodoList {
   /**
    * Check for circular dependencies
    */
-  private wouldCreateCircularDependency(taskId: string, dependsOnId: string): boolean {
+  private wouldCreateCircularDependency(
+    taskId: string,
+    dependsOnId: string,
+  ): boolean {
     const visited = new Set<string>();
-    
+
     const hasCycle = (currentId: string): boolean => {
-      if (currentId === taskId) return true;
-      if (visited.has(currentId)) return false;
-      
+      if (currentId === taskId) {
+        return true;
+      }
+      if (visited.has(currentId)) {
+        return false;
+      }
+
       visited.add(currentId);
       const current = this.todos.get(currentId);
-      
+
       if (current?.dependencies) {
         for (const depId of current.dependencies) {
-          if (hasCycle(depId)) return true;
+          if (hasCycle(depId)) {
+            return true;
+          }
         }
       }
-      
+
       return false;
     };
 
@@ -227,17 +252,23 @@ export class TodoList {
     byPriority: Record<TodoItem["priority"], number>;
   } {
     const todos = Array.from(this.todos.values());
-    const byStatus = todos.reduce((acc, todo) => {
-      acc[todo.status] = (acc[todo.status] || 0) + 1;
-      return acc;
-    }, {} as Record<TodoItem["status"], number>);
+    const byStatus = todos.reduce(
+      (acc, todo) => {
+        acc[todo.status] = (acc[todo.status] || 0) + 1;
+        return acc;
+      },
+      {} as Record<TodoItem["status"], number>,
+    );
 
-    const byPriority = todos.reduce((acc, todo) => {
-      if (todo.status !== "completed") {
-        acc[todo.priority] = (acc[todo.priority] || 0) + 1;
-      }
-      return acc;
-    }, {} as Record<TodoItem["priority"], number>);
+    const byPriority = todos.reduce(
+      (acc, todo) => {
+        if (todo.status !== "completed") {
+          acc[todo.priority] = (acc[todo.priority] || 0) + 1;
+        }
+        return acc;
+      },
+      {} as Record<TodoItem["priority"], number>,
+    );
 
     const total = todos.length;
     const completed = byStatus.completed || 0;
@@ -249,7 +280,7 @@ export class TodoList {
       pending: byStatus.pending || 0,
       blocked: byStatus.blocked || 0,
       completionRate: total > 0 ? (completed / total) * 100 : 0,
-      byPriority
+      byPriority,
     };
   }
 
@@ -259,7 +290,7 @@ export class TodoList {
   getSummary(): string {
     const progress = this.getProgress();
     const actionable = this.getActionableTasks();
-    
+
     let summary = `📋 Task Progress: ${progress.completed}/${progress.total} (${progress.completionRate.toFixed(1)}%)\n`;
     summary += `   ✅ Completed: ${progress.completed}\n`;
     summary += `   🔄 In Progress: ${progress.inProgress}\n`;
@@ -268,20 +299,28 @@ export class TodoList {
 
     if (Object.keys(progress.byPriority).length > 0) {
       summary += `\n📊 Remaining by Priority:\n`;
-      if (progress.byPriority.critical) summary += `   🔴 Critical: ${progress.byPriority.critical}\n`;
-      if (progress.byPriority.high) summary += `   🟠 High: ${progress.byPriority.high}\n`;
-      if (progress.byPriority.medium) summary += `   🟡 Medium: ${progress.byPriority.medium}\n`;
-      if (progress.byPriority.low) summary += `   🟢 Low: ${progress.byPriority.low}\n`;
+      if (progress.byPriority.critical) {
+        summary += `   🔴 Critical: ${progress.byPriority.critical}\n`;
+      }
+      if (progress.byPriority.high) {
+        summary += `   🟠 High: ${progress.byPriority.high}\n`;
+      }
+      if (progress.byPriority.medium) {
+        summary += `   🟡 Medium: ${progress.byPriority.medium}\n`;
+      }
+      if (progress.byPriority.low) {
+        summary += `   🟢 Low: ${progress.byPriority.low}\n`;
+      }
     }
 
     if (actionable.length > 0) {
       summary += `\n🎯 Next actionable tasks:\n`;
-      actionable.slice(0, 5).forEach(task => {
+      actionable.slice(0, 5).forEach((task) => {
         const priorityEmoji = {
           critical: "🔴",
           high: "🟠",
           medium: "🟡",
-          low: "🟢"
+          low: "🟢",
         }[task.priority];
         summary += `   ${priorityEmoji} ${task.content}\n`;
       });
@@ -313,12 +352,14 @@ export class TodoList {
    * Save to file
    */
   async save(): Promise<void> {
-    if (!this.filePath) return;
+    if (!this.filePath) {
+      return;
+    }
 
     const data = {
       version: 1,
       todos: Array.from(this.todos.entries()),
-      savedAt: Date.now()
+      savedAt: Date.now(),
     };
 
     writeFileSync(this.filePath, JSON.stringify(data, null, 2), "utf-8");
@@ -328,24 +369,26 @@ export class TodoList {
    * Load from file
    */
   private load(): void {
-    if (!this.filePath || !existsSync(this.filePath)) return;
+    if (!this.filePath || !existsSync(this.filePath)) {
+      return;
+    }
 
     try {
       const content = readFileSync(this.filePath, "utf-8");
       const data = JSON.parse(content);
-      
+
       if (data.version === 1 && Array.isArray(data.todos)) {
         this.todos = new Map(data.todos);
       }
     } catch (error) {
-      console.error("Failed to load todo list:", error);
+      // Failed to load todo list
     }
   }
 
   /**
    * Get all todos
    */
-  getAll(): TodoItem[] {
+  getAll(): Array<TodoItem> {
     return Array.from(this.todos.values());
   }
 

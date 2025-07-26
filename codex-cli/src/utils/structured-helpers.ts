@@ -14,7 +14,8 @@ const DEFAULT_CHUNK_SIZE_TOKENS = 6000;
 const MAX_RAW_CONTENT_SIZE = parseInt(
   process.env["CODEX_MAX_FETCH_SIZE"] || String(4 * 1024),
 ); // Default 4KB
-const ENABLE_SMART_EXTRACTION = process.env["CODEX_SMART_EXTRACTION"] !== "false"; // Default true
+const ENABLE_SMART_EXTRACTION =
+  process.env["CODEX_SMART_EXTRACTION"] !== "false"; // Default true
 
 // Model configuration for content processing
 export interface ModelConfig {
@@ -39,12 +40,12 @@ function getExtractionModel(config?: ModelConfig): string {
     if (process.env["AZURE_EXTRACTION_DEPLOYMENT"]) {
       return process.env["AZURE_EXTRACTION_DEPLOYMENT"];
     }
-    
+
     // Falls back to current model/deployment if it's already a mini/nano variant
     if (currentModel?.includes("mini") || currentModel?.includes("nano")) {
       return config?.model || currentModel;
     }
-    
+
     // Default to the current deployment name (not hardcoded model)
     return config?.model || "gpt-4o-mini";
   }
@@ -173,11 +174,13 @@ export async function extractRelevantContent(
   } catch (error) {
     // Provide Azure-specific guidance if applicable
     if (modelConfig?.provider === "azure") {
-      console.error(
+      process.stderr.write(
         "Content extraction failed. For Azure OpenAI:\n" +
-        "- Ensure your deployment supports the model: " + getExtractionModel(modelConfig) + "\n" +
-        "- Set AZURE_EXTRACTION_DEPLOYMENT to specify a valid deployment name\n" +
-        "- Check that your Azure OpenAI resource has the required model deployed"
+          "- Ensure your deployment supports the model: " +
+          getExtractionModel(modelConfig) +
+          "\n" +
+          "- Set AZURE_EXTRACTION_DEPLOYMENT to specify a valid deployment name\n" +
+          "- Check that your Azure OpenAI resource has the required model deployed\n",
       );
     }
     // Fallback to simple truncation if extraction fails
@@ -228,11 +231,13 @@ export async function generateSynopsis(
   } catch (error) {
     // Provide Azure-specific guidance if applicable
     if (modelConfig?.provider === "azure") {
-      console.error(
+      process.stderr.write(
         "Synopsis generation failed. For Azure OpenAI:\n" +
-        "- Verify your deployment '" + getExtractionModel(modelConfig) + "' is accessible\n" +
-        "- Check API key and endpoint configuration\n" +
-        "- Ensure the deployment has sufficient quota"
+          "- Verify your deployment '" +
+          getExtractionModel(modelConfig) +
+          "' is accessible\n" +
+          "- Check API key and endpoint configuration\n" +
+          "- Ensure the deployment has sufficient quota\n",
       );
     }
     // Fallback to simple truncation if synopsis generation fails
@@ -459,7 +464,7 @@ export function truncateForAzure(
   ];
 
   // Extract key phrases that should be preserved
-  const keyPhrases: string[] = [];
+  const keyPhrases: Array<string> = [];
   for (const pattern of keyPatterns) {
     const match = description.match(pattern);
     if (match) {
@@ -468,9 +473,8 @@ export function truncateForAzure(
   }
 
   // Calculate space needed for key features
-  const keyFeaturesText = keyPhrases.length > 0 
-    ? ` Key features: ${keyPhrases.join(", ")}.`
-    : "";
+  const keyFeaturesText =
+    keyPhrases.length > 0 ? ` Key features: ${keyPhrases.join(", ")}.` : "";
   const keyFeaturesLength = keyFeaturesText.length;
 
   // Truncate main description to leave room for key features
@@ -495,7 +499,7 @@ export function truncateForAzure(
 
   // Append key features if we extracted any
   const result = truncated + keyFeaturesText;
-  
+
   // Final safety check
   return result.slice(0, maxLength);
 }

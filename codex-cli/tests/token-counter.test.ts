@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { 
-  countTokensInText, 
+import {
+  countTokensInText,
   countTokensUsed,
   wouldExceedTokenLimit,
-  getTokenStats
+  getTokenStats,
 } from "../src/utils/token-counter.js";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
@@ -22,72 +22,73 @@ describe("Token Counter", () => {
   });
 
   test("countTokensUsed should count tokens in messages", () => {
-    const items: ResponseItem[] = [
+    const items: Array<ResponseItem> = [
       {
         type: "message",
         role: "user",
-        content: [
-          { type: "input_text", text: "What is the weather today?" }
-        ]
+        content: [{ type: "input_text", text: "What is the weather today?" }],
       },
       {
-        type: "message", 
+        type: "message",
         role: "assistant",
         content: [
-          { type: "output_text", text: "I don't have access to real-time weather data." }
-        ]
-      }
+          {
+            type: "output_text",
+            text: "I don't have access to real-time weather data.",
+          },
+        ],
+      },
     ];
-    
+
     const tokens = countTokensUsed(items, "gpt-4");
     expect(tokens).toBeGreaterThan(0);
     expect(tokens).toBeLessThan(100);
   });
 
   test("countTokensUsed should count function call tokens", () => {
-    const items: ResponseItem[] = [
+    const items: Array<ResponseItem> = [
       {
         type: "function_call",
         name: "get_weather",
-        arguments: '{"location": "New York"}'
+        arguments: '{"location": "New York"}',
       },
       {
         type: "function_call_output",
-        output: "Temperature: 72°F, Sunny"
-      }
+        output: "Temperature: 72°F, Sunny",
+      },
     ];
-    
+
     const tokens = countTokensUsed(items, "gpt-4");
     expect(tokens).toBeGreaterThan(10); // Function calls have overhead
   });
 
   test("wouldExceedTokenLimit should check if content exceeds limit", () => {
-    const items: ResponseItem[] = [
+    const items: Array<ResponseItem> = [
       {
         type: "message",
-        role: "user", 
-        content: [{ type: "input_text", text: "Hello" }]
-      }
+        role: "user",
+        content: [{ type: "input_text", text: "Hello" }],
+      },
     ];
-    
+
     const shortText = "World";
     const longText = "A".repeat(10000);
-    
+
     expect(wouldExceedTokenLimit(items, shortText, "gpt-4", 1000)).toBe(false);
     expect(wouldExceedTokenLimit(items, longText, "gpt-4", 100)).toBe(true);
   });
 
   test("getTokenStats should return correct statistics", () => {
-    const items: ResponseItem[] = [
+    const items: Array<ResponseItem> = [
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "Test message" }]
-      }
+        content: [{ type: "input_text", text: "Test message" }],
+      },
     ];
-    
+
     const stats = getTokenStats(items, "gpt-4", 1000);
-    
+
     expect(stats.max).toBe(1000);
     expect(stats.used).toBeGreaterThan(0);
     expect(stats.remaining).toBeLessThan(1000);

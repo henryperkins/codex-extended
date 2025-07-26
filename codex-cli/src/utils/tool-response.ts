@@ -2,13 +2,13 @@
  * Unified tool response format with metadata
  */
 
-export interface ToolResponse<T = any> {
+export interface ToolResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: {
     code: string;
     message: string;
-    details?: Record<string, any>;
+    details?: Record<string, unknown>;
   };
   metadata: {
     tool: string;
@@ -16,7 +16,7 @@ export interface ToolResponse<T = any> {
     timestamp: string;
     version: string;
   };
-  suggestions?: string[];
+  suggestions?: Array<string>;
 }
 
 /**
@@ -24,10 +24,10 @@ export interface ToolResponse<T = any> {
  */
 export async function executeToolWithMetrics<T>(
   toolName: string,
-  handler: () => Promise<T>
+  handler: () => Promise<T>,
 ): Promise<ToolResponse<T>> {
   const startTime = Date.now();
-  
+
   try {
     const data = await handler();
     return {
@@ -37,24 +37,30 @@ export async function executeToolWithMetrics<T>(
         tool: toolName,
         executionTime: Date.now() - startTime,
         timestamp: new Date().toISOString(),
-        version: "1.0.0"
-      }
+        version: "1.0.0",
+      },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorObj = error as {
+      code?: string;
+      message?: string;
+      details?: Record<string, unknown>;
+      suggestions?: Array<string>;
+    };
     return {
       success: false,
       error: {
-        code: error.code || 'UNKNOWN_ERROR',
-        message: error.message || 'An unknown error occurred',
-        details: error.details
+        code: errorObj.code || "UNKNOWN_ERROR",
+        message: errorObj.message || "An unknown error occurred",
+        details: errorObj.details,
       },
       metadata: {
         tool: toolName,
         executionTime: Date.now() - startTime,
         timestamp: new Date().toISOString(),
-        version: "1.0.0"
+        version: "1.0.0",
       },
-      suggestions: error.suggestions
+      suggestions: errorObj.suggestions,
     };
   }
 }
@@ -66,24 +72,24 @@ export function wrapLegacyResponse(
   toolName: string,
   output: string,
   executionTime: number,
-  error?: boolean
+  error?: boolean,
 ): ToolResponse<string> {
   if (error) {
     return {
       success: false,
       error: {
-        code: 'TOOL_ERROR',
-        message: output
+        code: "TOOL_ERROR",
+        message: output,
       },
       metadata: {
         tool: toolName,
         executionTime,
         timestamp: new Date().toISOString(),
-        version: "1.0.0"
-      }
+        version: "1.0.0",
+      },
     };
   }
-  
+
   return {
     success: true,
     data: output,
@@ -91,8 +97,8 @@ export function wrapLegacyResponse(
       tool: toolName,
       executionTime,
       timestamp: new Date().toISOString(),
-      version: "1.0.0"
-    }
+      version: "1.0.0",
+    },
   };
 }
 
@@ -105,15 +111,15 @@ export function formatToolResponse(response: ToolResponse): string {
       output: response.data,
       metadata: {
         ...response.metadata,
-        success: true
-      }
+        success: true,
+      },
     });
   } else {
     return JSON.stringify({
       error: true,
       ...response.error,
       metadata: response.metadata,
-      suggestions: response.suggestions
+      suggestions: response.suggestions,
     });
   }
 }

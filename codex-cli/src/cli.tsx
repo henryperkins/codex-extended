@@ -22,7 +22,6 @@ import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
-import { validateAzureConfiguration } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
 import type { ReasoningEffort } from "openai/resources.mjs";
 
@@ -34,6 +33,7 @@ import { ReviewDecision } from "./utils/agent/review";
 import { AutoApprovalMode } from "./utils/auto-approval-mode";
 import { checkForUpdates } from "./utils/check-updates";
 import {
+  validateAzureConfiguration,
   loadConfig,
   PRETTY_PRINT,
   INSTRUCTIONS_FILEPATH,
@@ -290,11 +290,11 @@ let config = loadConfig(undefined, undefined, {
 const azureValidation = validateAzureConfiguration();
 if (azureValidation.isAzureEnvironment && azureValidation.warnings.length > 0) {
   // Display warnings in yellow/warning color
-  console.warn("\n⚠️  Azure Configuration Warnings:");
-  azureValidation.warnings.forEach(warning => {
-    console.warn(`\n${warning}`);
+  process.stderr.write("\n⚠️  Azure Configuration Warnings:\n");
+  azureValidation.warnings.forEach((warning) => {
+    process.stderr.write(`\n${warning}\n`);
   });
-  console.warn("\n"); // Add spacing
+  process.stderr.write("\n"); // Add spacing
 }
 
 // `prompt` can be updated later when the user resumes a previous session

@@ -19,7 +19,7 @@ export async function fetchUrl(url: string): Promise<string> {
     if (error instanceof TypeError && error.message.includes("fetch")) {
       throw new Error(
         "Network access may be restricted. Unable to fetch URL.\n" +
-        "If using Azure, ensure your network security group allows outbound HTTPS traffic."
+          "If using Azure, ensure your network security group allows outbound HTTPS traffic.",
       );
     }
     throw error;
@@ -55,10 +55,10 @@ export async function searchWeb(query: string): Promise<string> {
   // `web_search` tool for ad-hoc queries.
 
   // Warn when falling back to DuckDuckGo
-  console.warn(
+  process.stderr.write(
     "Using DuckDuckGo fallback for web search (limited results).\n" +
-    "For better results, set BRAVE_SEARCH_API_KEY (recommended) or SERP_API_KEY.\n" +
-    "Get a free Brave Search API key at: https://brave.com/search/api/"
+      "For better results, set BRAVE_SEARCH_API_KEY (recommended) or SERP_API_KEY.\n" +
+      "Get a free Brave Search API key at: https://brave.com/search/api/\n",
   );
 
   try {
@@ -68,7 +68,7 @@ export async function searchWeb(query: string): Promise<string> {
     // higher-quality providers.
     const msg =
       error instanceof Error ? error.message : String(error ?? "unknown");
-    
+
     throw new Error(
       `DuckDuckGo fallback failed (${msg}). ` +
         "Please set BRAVE_SEARCH_API_KEY (recommended) or SERP_API_KEY to enable full web search support.\n" +
@@ -258,4 +258,3 @@ async function searchWebSerp(query: string, apiKey: string): Promise<string> {
 
   return results || "No results found.";
 }
-

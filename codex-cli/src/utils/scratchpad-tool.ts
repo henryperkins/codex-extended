@@ -1,5 +1,5 @@
+import type { Scratchpad } from "./scratchpad.js";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
-import { Scratchpad } from "./scratchpad.js";
 
 /**
  * Create the scratchpad tool definition
@@ -22,20 +22,21 @@ Examples:
       action: {
         type: "string",
         enum: ["write", "read", "update", "delete", "clear", "summarize"],
-        description: "The action to perform on the scratchpad"
+        description: "The action to perform on the scratchpad",
       },
       content: {
         type: "string",
-        description: "Content to write or update (required for write/update actions)"
+        description:
+          "Content to write or update (required for write/update actions)",
       },
       category: {
         type: "string",
         enum: ["note", "plan", "result", "error", "state"],
-        description: "Category of the entry (default: note)"
+        description: "Category of the entry (default: note)",
       },
       id: {
         type: "string",
-        description: "Entry ID (required for update/delete actions)"
+        description: "Entry ID (required for update/delete actions)",
       },
       options: {
         type: "object",
@@ -43,32 +44,45 @@ Examples:
           category: {
             type: "string",
             enum: ["note", "plan", "result", "error", "state"],
-            description: "Filter by category (for read action)"
+            description: "Filter by category (for read action)",
           },
           limit: {
             type: "number",
-            description: "Maximum number of entries to return (for read action)"
+            description:
+              "Maximum number of entries to return (for read action)",
           },
           search: {
             type: "string",
-            description: "Search term to filter entries (for read action)"
-          }
+            description: "Search term to filter entries (for read action)",
+          },
         },
         additionalProperties: false,
-        description: "Options for read action"
-      }
+        description: "Options for read action",
+      },
     },
     required: ["action"],
-    additionalProperties: false
-  }
+    additionalProperties: false,
+  },
 };
 
 /**
  * Handle scratchpad tool calls
  */
+interface ScratchpadArgs {
+  action: "write" | "read" | "update" | "delete" | "clear" | "summarize";
+  content?: string;
+  category?: "note" | "plan" | "result" | "error" | "state";
+  id?: string;
+  options?: {
+    category?: "note" | "plan" | "result" | "error" | "state";
+    limit?: number;
+    search?: string;
+  };
+}
+
 export async function handleScratchpadTool(
-  args: any,
-  scratchpad: Scratchpad
+  args: ScratchpadArgs,
+  scratchpad: Scratchpad,
 ): Promise<string> {
   const { action, content, category, id, options } = args;
 
@@ -86,12 +100,14 @@ export async function handleScratchpadTool(
       if (entries.length === 0) {
         return "No entries found in scratchpad";
       }
-      
-      const formatted = entries.map(entry => {
-        const timestamp = new Date(entry.timestamp).toLocaleString();
-        return `[${entry.category}] ${entry.id} (${timestamp})\n${entry.content}`;
-      }).join('\n\n---\n\n');
-      
+
+      const formatted = entries
+        .map((entry) => {
+          const timestamp = new Date(entry.timestamp).toLocaleString();
+          return `[${entry.category}] ${entry.id} (${timestamp})\n${entry.content}`;
+        })
+        .join("\n\n---\n\n");
+
       return `Found ${entries.length} entries:\n\n${formatted}`;
     }
 
@@ -119,9 +135,6 @@ export async function handleScratchpadTool(
     case "summarize": {
       return scratchpad.summarize();
     }
-
-    default:
-      return `Error: Unknown action '${action}'`;
   }
 }
 
@@ -139,44 +152,56 @@ export class ScratchpadInterface {
     return this.scratchpad.write(note, "note");
   }
 
-  async saveResult(result: string, metadata?: Record<string, any>): Promise<string> {
+  async saveResult(
+    result: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<string> {
     return this.scratchpad.write(result, "result", metadata);
   }
 
-  async saveError(error: string, metadata?: Record<string, any>): Promise<string> {
+  async saveError(
+    error: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<string> {
     return this.scratchpad.write(error, "error", metadata);
   }
 
-  async saveState(state: any): Promise<string> {
+  async saveState(state: unknown): Promise<string> {
     return this.scratchpad.write(
-      typeof state === 'string' ? state : JSON.stringify(state, null, 2),
-      "state"
+      typeof state === "string" ? state : JSON.stringify(state, null, 2),
+      "state",
     );
   }
 
-  getPlans(limit?: number): string[] {
-    return this.scratchpad.read({ category: "plan", limit }).map(e => e.content);
+  getPlans(limit?: number): Array<string> {
+    return this.scratchpad
+      .read({ category: "plan", limit })
+      .map((e) => e.content);
   }
 
-  getNotes(limit?: number): string[] {
-    return this.scratchpad.read({ category: "note", limit }).map(e => e.content);
+  getNotes(limit?: number): Array<string> {
+    return this.scratchpad
+      .read({ category: "note", limit })
+      .map((e) => e.content);
   }
 
-  getErrors(limit?: number): Array<{ content: string; metadata?: any }> {
-    return this.scratchpad.read({ category: "error", limit }).map(e => ({
+  getErrors(limit?: number): Array<{ content: string; metadata?: unknown }> {
+    return this.scratchpad.read({ category: "error", limit }).map((e) => ({
       content: e.content,
-      metadata: e.metadata
+      metadata: e.metadata,
     }));
   }
 
   getRecentActivity(minutes: number = 10): string {
-    const since = Date.now() - (minutes * 60 * 1000);
+    const since = Date.now() - minutes * 60 * 1000;
     const recent = this.scratchpad.read({ since });
-    
+
     if (recent.length === 0) {
       return `No activity in the last ${minutes} minutes`;
     }
 
-    return recent.map(e => `[${e.category}] ${e.content.substring(0, 100)}...`).join('\n');
+    return recent
+      .map((e) => `[${e.category}] ${e.content.substring(0, 100)}...`)
+      .join("\n");
   }
 }

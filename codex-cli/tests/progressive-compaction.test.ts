@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   getCompactionLevel,
   CompactionLevel,
@@ -78,14 +78,21 @@ describe("Progressive Compaction", () => {
     });
 
     test("should handle LIGHT compaction correctly", () => {
-      const items: ResponseItem[] = [
-        ...Array(25).fill(null).map((_, i) => createMessage("user", `Old message ${i}`)),
-        ...Array(5).fill(null).map((_, i) => createMessage("assistant", `Recent message ${i}`)),
+      const items: Array<ResponseItem> = [
+        ...Array(25)
+          .fill(null)
+          .map((_, i) => createMessage("user", `Old message ${i}`)),
+        ...Array(5)
+          .fill(null)
+          .map((_, i) => createMessage("assistant", `Recent message ${i}`)),
         createToolCall(),
       ];
 
       const config = getCompactionConfig(CompactionLevel.LIGHT);
-      const { toSummarize, toKeep, toDropInfo } = prepareItemsForCompaction(items, config);
+      const { toSummarize, toKeep, toDropInfo } = prepareItemsForCompaction(
+        items,
+        config,
+      );
 
       // With LIGHT config: keepRecentMessages=10, summarizeOlderThan=20
       // Total 30 messages + 1 tool
@@ -99,20 +106,26 @@ describe("Progressive Compaction", () => {
     });
 
     test("should drop tool outputs in MEDIUM compaction", () => {
-      const items: ResponseItem[] = [
-        ...Array(10).fill(null).map((_, i) => createMessage("user", `Message ${i}`)),
-        ...Array(5).fill(null).map(() => createToolCall()),
+      const items: Array<ResponseItem> = [
+        ...Array(10)
+          .fill(null)
+          .map((_, i) => createMessage("user", `Message ${i}`)),
+        ...Array(5)
+          .fill(null)
+          .map(() => createToolCall()),
       ];
 
       const config = getCompactionConfig(CompactionLevel.MEDIUM);
       const { toKeep, toDropInfo } = prepareItemsForCompaction(items, config);
 
-      expect(toKeep.filter(item => item.type === "function_call")).toHaveLength(0);
+      expect(
+        toKeep.filter((item) => item.type === "function_call"),
+      ).toHaveLength(0);
       expect(toDropInfo).toContain("Dropped 5 tool call outputs");
     });
 
     test("should drop system messages in HEAVY compaction", () => {
-      const items: ResponseItem[] = [
+      const items: Array<ResponseItem> = [
         createMessage("system", "System message 1"),
         createMessage("user", "User message"),
         createMessage("system", "System message 2"),
@@ -122,7 +135,7 @@ describe("Progressive Compaction", () => {
       const config = getCompactionConfig(CompactionLevel.HEAVY);
       const { toKeep, toDropInfo } = prepareItemsForCompaction(items, config);
 
-      expect(toKeep.filter(item => item.role === "system")).toHaveLength(0);
+      expect(toKeep.filter((item) => item.role === "system")).toHaveLength(0);
       expect(toDropInfo).toContain("Dropped 2 system messages");
     });
   });
@@ -130,19 +143,38 @@ describe("Progressive Compaction", () => {
   describe("estimateCompactionSavings", () => {
     test("should estimate savings for different levels", () => {
       // Create enough messages to trigger summarization
-      const items: ResponseItem[] = Array(100).fill(null).map((_, i) => ({
-        id: `msg-${i}`,
-        type: "message",
-        role: i % 2 === 0 ? "user" : "assistant",
-        content: [{ type: "input_text", text: "This is a test message that should count as tokens when we have enough content to summarize" }],
-      }));
+      const items: Array<ResponseItem> = Array(100)
+        .fill(null)
+        .map((_, i) => ({
+          id: `msg-${i}`,
+          type: "message",
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: [
+            {
+              type: "input_text",
+              text: "This is a test message that should count as tokens when we have enough content to summarize",
+            },
+          ],
+        }));
 
       const model = "gpt-4";
-      
-      const lightSavings = estimateCompactionSavings(items, model, CompactionLevel.LIGHT);
-      const mediumSavings = estimateCompactionSavings(items, model, CompactionLevel.MEDIUM);
-      const heavySavings = estimateCompactionSavings(items, model, CompactionLevel.HEAVY);
-      
+
+      const lightSavings = estimateCompactionSavings(
+        items,
+        model,
+        CompactionLevel.LIGHT,
+      );
+      const mediumSavings = estimateCompactionSavings(
+        items,
+        model,
+        CompactionLevel.MEDIUM,
+      );
+      const heavySavings = estimateCompactionSavings(
+        items,
+        model,
+        CompactionLevel.HEAVY,
+      );
+
       // Each level should save more tokens
       expect(lightSavings).toBeGreaterThan(0);
       expect(mediumSavings).toBeGreaterThan(lightSavings);

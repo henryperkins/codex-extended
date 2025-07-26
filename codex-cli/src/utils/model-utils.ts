@@ -1,9 +1,9 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { countTokensUsed } from "./token-counter.js";
 import { getApiKey } from "./config.js";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
+import { countTokensUsed } from "./token-counter.js";
 
 const MODEL_LIST_TIMEOUT_MS = 2_000; // 2 seconds
 export const RECOMMENDED_MODELS: Array<string> = ["o4-mini", "o3"];

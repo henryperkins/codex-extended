@@ -1,4 +1,5 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+
 import { encode, encodeChat } from "gpt-tokenizer";
 
 // Define ChatMessage type based on gpt-tokenizer expectations
@@ -6,7 +7,6 @@ interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
-
 
 /**
  * Count tokens in a simple text string
@@ -16,7 +16,9 @@ export function countTokensInText(text: string): number {
     const tokens = encode(text);
     return tokens.length;
   } catch (error) {
-    console.warn(`Failed to encode text with gpt-tokenizer: ${error}`);
+    process.stderr.write(
+      `Failed to encode text with gpt-tokenizer: ${error}\n`,
+    );
     // Fallback to character-based approximation
     return Math.ceil(text.length / 4);
   }
@@ -29,12 +31,12 @@ function responseItemToChatMessage(item: ResponseItem): ChatMessage | null {
   if (item.type !== "message") {
     return null;
   }
-  
-  const messageItem = item as ResponseItem & { 
-    role: string; 
-    content: Array<{ type: string; text?: string; refusal?: string }> 
+
+  const messageItem = item as ResponseItem & {
+    role: string;
+    content: Array<{ type: string; text?: string; refusal?: string }>;
   };
-  
+
   // Extract text content from the message
   let text = "";
   for (const c of messageItem.content || []) {
@@ -44,11 +46,15 @@ function responseItemToChatMessage(item: ResponseItem): ChatMessage | null {
       text += c.refusal || "";
     }
   }
-  
+
   // Map roles to ChatMessage format
-  const role = messageItem.role === "assistant" ? "assistant" : 
-               messageItem.role === "system" ? "system" : "user";
-  
+  const role =
+    messageItem.role === "assistant"
+      ? "assistant"
+      : messageItem.role === "system"
+        ? "system"
+        : "user";
+
   return {
     role,
     content: text,
@@ -65,11 +71,11 @@ function countFunctionCallTokens(item: ResponseItem): number {
     // Add overhead for function call structure (approximately 7 tokens)
     return nameTokens + argsTokens + 7;
   }
-  
+
   if (item.type === "function_call_output") {
     return countTokensInText(item.output || "") + 3;
   }
-  
+
   return 0;
 }
 
@@ -77,27 +83,33 @@ function countFunctionCallTokens(item: ResponseItem): number {
  * Accurately count tokens used by a list of ResponseItems
  * Uses gpt-tokenizer for precise token counting based on the model
  */
-export function countTokensUsed(items: Array<ResponseItem>, model: string): number {
+export function countTokensUsed(
+  items: Array<ResponseItem>,
+  model: string,
+): number {
   // Separate messages from function calls
-  const messages: ChatMessage[] = [];
+  const messages: Array<ChatMessage> = [];
   let functionCallTokens = 0;
-  
+
   for (const item of items) {
     const chatMessage = responseItemToChatMessage(item);
     if (chatMessage && chatMessage.content) {
       messages.push(chatMessage);
-    } else if (item.type === "function_call" || item.type === "function_call_output") {
+    } else if (
+      item.type === "function_call" ||
+      item.type === "function_call_output"
+    ) {
       functionCallTokens += countFunctionCallTokens(item);
     }
   }
-  
+
   // Use encodeChat for messages if available
   try {
     if (messages.length > 0) {
       // Map model names to what gpt-tokenizer expects
       let gptModel = model;
       const modelLower = model.toLowerCase();
-      
+
       if (modelLower.includes("o3")) {
         gptModel = "o3";
       } else if (modelLower.includes("gpt-4.1")) {
@@ -109,13 +121,18 @@ export function countTokensUsed(items: Array<ResponseItem>, model: string): numb
       } else if (modelLower.includes("gpt-3.5")) {
         gptModel = "gpt-3.5-turbo";
       }
-      
-      const messageTokens = encodeChat(messages, gptModel as any);
+
+      const messageTokens = encodeChat(
+        messages,
+        gptModel as Parameters<typeof encodeChat>[1],
+      );
       return messageTokens.length + functionCallTokens;
     }
     return functionCallTokens;
   } catch (error) {
-    console.warn(`Failed to encode chat with model ${model}: ${error}`);
+    process.stderr.write(
+      `Failed to encode chat with model ${model}: ${error}\n`,
+    );
     // Fallback to individual message encoding
     let totalTokens = functionCallTokens;
     for (const msg of messages) {
@@ -138,7 +155,7 @@ export function wouldExceedTokenLimit(
 ): boolean {
   const currentTokens = countTokensUsed(currentItems, model);
   const newTokens = countTokensInText(newContent);
-  return (currentTokens + newTokens) > maxTokens;
+  return currentTokens + newTokens > maxTokens;
 }
 
 /**
@@ -161,7 +178,7 @@ export function getTokenStats(
   const remaining = Math.max(0, maxTokens - used);
   const percentUsed = (used / maxTokens) * 100;
   const percentRemaining = (remaining / maxTokens) * 100;
-  
+
   return {
     used,
     max: maxTokens,
