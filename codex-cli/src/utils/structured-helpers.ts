@@ -12,9 +12,9 @@ const DEFAULT_CHUNK_SIZE_TOKENS = 6000;
 
 // Content size limits - can be overridden via environment variables
 const MAX_RAW_CONTENT_SIZE = parseInt(
-  process.env.CODEX_MAX_FETCH_SIZE || String(4 * 1024),
+  process.env["CODEX_MAX_FETCH_SIZE"] || String(4 * 1024),
 ); // Default 4KB
-const ENABLE_SMART_EXTRACTION = process.env.CODEX_SMART_EXTRACTION !== "false"; // Default true
+const ENABLE_SMART_EXTRACTION = process.env["CODEX_SMART_EXTRACTION"] !== "false"; // Default true
 
 // Model configuration for content processing
 export interface ModelConfig {
@@ -25,8 +25,8 @@ export interface ModelConfig {
 // Get the appropriate model for content extraction based on provider
 function getExtractionModel(config?: ModelConfig): string {
   // Check environment variable first
-  if (process.env.CODEX_EXTRACTION_MODEL) {
-    return process.env.CODEX_EXTRACTION_MODEL;
+  if (process.env["CODEX_EXTRACTION_MODEL"]) {
+    return process.env["CODEX_EXTRACTION_MODEL"];
   }
 
   // Use provider-specific model naming
@@ -34,12 +34,19 @@ function getExtractionModel(config?: ModelConfig): string {
   const currentModel = config?.model?.toLowerCase();
 
   if (provider === "azure") {
-    // Azure: Use gpt-4.1-mini for efficient extraction
-    // Falls back to current model if it's already a mini/nano variant
-    if (currentModel?.includes("mini") || currentModel?.includes("nano")) {
-      return currentModel;
+    // Azure: Use deployment-specific names
+    // Check for Azure-specific extraction deployment
+    if (process.env["AZURE_EXTRACTION_DEPLOYMENT"]) {
+      return process.env["AZURE_EXTRACTION_DEPLOYMENT"];
     }
-    return "gpt-4.1-mini";
+    
+    // Falls back to current model/deployment if it's already a mini/nano variant
+    if (currentModel?.includes("mini") || currentModel?.includes("nano")) {
+      return config?.model || currentModel;
+    }
+    
+    // Default to the current deployment name (not hardcoded model)
+    return config?.model || "gpt-4o-mini";
   }
 
   // For other providers (OpenAI, etc.)
@@ -164,6 +171,15 @@ export async function extractRelevantContent(
     const extracted = (response as ChatCompletion).choices[0]?.message?.content;
     return extracted || content.slice(0, MAX_RAW_CONTENT_SIZE);
   } catch (error) {
+    // Provide Azure-specific guidance if applicable
+    if (modelConfig?.provider === "azure") {
+      console.error(
+        "Content extraction failed. For Azure OpenAI:\n" +
+        "- Ensure your deployment supports the model: " + getExtractionModel(modelConfig) + "\n" +
+        "- Set AZURE_EXTRACTION_DEPLOYMENT to specify a valid deployment name\n" +
+        "- Check that your Azure OpenAI resource has the required model deployed"
+      );
+    }
     // Fallback to simple truncation if extraction fails
     return content.slice(0, MAX_RAW_CONTENT_SIZE);
   }
@@ -210,8 +226,16 @@ export async function generateSynopsis(
       content.slice(0, 200) + "..."
     );
   } catch (error) {
+    // Provide Azure-specific guidance if applicable
+    if (modelConfig?.provider === "azure") {
+      console.error(
+        "Synopsis generation failed. For Azure OpenAI:\n" +
+        "- Verify your deployment '" + getExtractionModel(modelConfig) + "' is accessible\n" +
+        "- Check API key and endpoint configuration\n" +
+        "- Ensure the deployment has sufficient quota"
+      );
+    }
     // Fallback to simple truncation if synopsis generation fails
-    // Synopsis generation failed, fall back to truncation
     return content.slice(0, 200) + "...";
   }
 }
@@ -424,13 +448,54 @@ export function truncateForAzure(
     return description;
   }
 
-  // Try to truncate at a sentence boundary
-  const truncated = description.slice(0, maxLength - 3);
-  const lastPeriod = truncated.lastIndexOf(".");
+  // Key patterns to preserve in tool descriptions
+  const keyPatterns = [
+    /returns? structured (?:data|results?)/i,
+    /with optional synopsis/i,
+    /chunking for large/i,
+    /URLs?, titles?, and snippets?/i,
+    /structured format/i,
+    /metadata/i,
+  ];
 
-  if (lastPeriod > maxLength * 0.7) {
-    return truncated.slice(0, lastPeriod + 1);
+  // Extract key phrases that should be preserved
+  const keyPhrases: string[] = [];
+  for (const pattern of keyPatterns) {
+    const match = description.match(pattern);
+    if (match) {
+      keyPhrases.push(match[0]);
+    }
   }
 
-  return truncated + "...";
+  // Calculate space needed for key features
+  const keyFeaturesText = keyPhrases.length > 0 
+    ? ` Key features: ${keyPhrases.join(", ")}.`
+    : "";
+  const keyFeaturesLength = keyFeaturesText.length;
+
+  // Truncate main description to leave room for key features
+  const mainDescMaxLength = maxLength - keyFeaturesLength - 10; // 10 char buffer
+  let truncated = description.slice(0, mainDescMaxLength);
+
+  // Try to truncate at a sentence boundary
+  const lastPeriod = truncated.lastIndexOf(".");
+  const lastComma = truncated.lastIndexOf(",");
+  const lastSpace = truncated.lastIndexOf(" ");
+
+  // Prefer sentence boundary, then comma, then space
+  if (lastPeriod > mainDescMaxLength * 0.7) {
+    truncated = truncated.slice(0, lastPeriod + 1);
+  } else if (lastComma > mainDescMaxLength * 0.8) {
+    truncated = truncated.slice(0, lastComma) + ".";
+  } else if (lastSpace > mainDescMaxLength * 0.9) {
+    truncated = truncated.slice(0, lastSpace) + "...";
+  } else {
+    truncated = truncated + "...";
+  }
+
+  // Append key features if we extracted any
+  const result = truncated + keyFeaturesText;
+  
+  // Final safety check
+  return result.slice(0, maxLength);
 }

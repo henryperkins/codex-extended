@@ -1,6 +1,6 @@
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
 
-import { approximateTokensUsed } from "./approximate-tokens-used.js";
+import { countTokensUsed } from "./token-counter.js";
 import { getApiKey } from "./config.js";
 import { type SupportedModelId, openAiModelInfo } from "./model-info.js";
 import { createOpenAIClient } from "./openai-client.js";
@@ -114,7 +114,7 @@ export function calculateContextPercentRemaining(
   items: Array<ResponseItem>,
   model: string,
 ): number {
-  const used = approximateTokensUsed(items);
+  const used = countTokensUsed(items, model);
   const max = maxTokensForModel(model);
   const remaining = Math.max(0, max - used);
   return (remaining / max) * 100;

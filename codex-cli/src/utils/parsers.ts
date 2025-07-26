@@ -11,6 +11,37 @@ import { formatCommandForDisplay } from "src/format-command.js";
 // including the entire `console` module when only the `log` function is
 // required.
 
+/**
+ * Attempt to repair common JSON parsing errors
+ */
+function attemptJSONRepair(jsonStr: string): string {
+  // Handle unescaped newlines in string values
+  // This regex finds strings that contain actual newlines and escapes them
+  let repaired = jsonStr.replace(
+    /"([^"\\]*(\\.[^"\\]*)*)"\s*:\s*"([^"\\]*(\\.[^"\\]*)*)\n([^"\\]*(\\.[^"\\]*)*)"/g,
+    (_match, p1, _p2, p3, _p4, p5) => {
+      const key = p1;
+      const valuePart1 = p3;
+      const valuePart2 = p5;
+      return `"${key}": "${valuePart1}\\n${valuePart2}"`;
+    }
+  );
+  
+  // Handle multiline content in todo_list and scratchpad content fields
+  repaired = repaired.replace(
+    /("content"\s*:\s*"[^"]*)\n([^"]*")/g,
+    '$1\\n$2'
+  );
+  
+  // Handle other common newlines in values
+  repaired = repaired.replace(
+    /:\s*"([^"]*)\n([^"]*)"/g,
+    ': "$1\\n$2"'
+  );
+  
+  return repaired;
+}
+
 export function parseToolCallOutput(toolCallOutput: string): {
   output: string;
   metadata: ExecOutputMetadata;
@@ -92,8 +123,14 @@ export function parseToolCallArguments(
   try {
     json = JSON.parse(toolCallArguments);
   } catch (err) {
-    log(`Failed to parse toolCall.arguments: ${toolCallArguments}`);
-    return undefined;
+    // Try to fix common JSON errors before giving up
+    try {
+      const fixed = attemptJSONRepair(toolCallArguments);
+      json = JSON.parse(fixed);
+    } catch (secondErr) {
+      log(`Failed to parse toolCall.arguments: ${toolCallArguments}`);
+      return undefined;
+    }
   }
 
   if (typeof json !== "object" || json == null) {

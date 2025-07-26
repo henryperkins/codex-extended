@@ -294,7 +294,7 @@ const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
     ...(webSearchOptions ? { web_search_options: webSearchOptions } : {}),
     temperature: input.temperature,
     top_p: input.top_p,
-    tool_choice: input.tool_choice === undefined ? "auto" : input.tool_choice,
+    tool_choice: input.tool_choice === undefined ? "auto" : input.tool_choice as OpenAI.Chat.Completions.ChatCompletionToolChoiceOption,
     stream: input.stream || false,
     user: input.user,
     metadata: input.metadata,
@@ -324,13 +324,35 @@ async function responsesCreateViaChatCompletions(
   // API on `AzureOpenAI`.  We therefore use a runtime feature-check to detect
   // availability instead of relying on `instanceof` or compile-time types.
 
+  // We intentionally restrict usage of the native /responses endpoint to the
+  // first-party OpenAI and Azure OpenAI services.  For any other provider we
+  // *always* fall back to emulating the Responses API via Chat-Completions –
+  // even when a `responses` property happens to exist on the client instance
+  // (some third-party wrappers expose a stub that ultimately fails at
+  // runtime).
+
+  // Determine whether the instantiated client targets OpenAI or Azure OpenAI
+  // based on the resolved `baseURL`.  When `baseURL` is omitted the OpenAI
+  // SDK defaults to "https://api.openai.com/v1" which satisfies the
+  // first-party check below.
+
+  const baseURL = (openai as unknown as { baseURL?: string }).baseURL || "https://api.openai.com/v1";
+
+  const isFirstPartyOpenAI = /api\.openai\.com/i.test(baseURL);
+  const isAzureOpenAI = /\.openai\.azure\.com/i.test(baseURL);
+
   const maybeResponses = (
     openai as unknown as {
       responses?: { create: (p: ResponseCreateInput) => unknown };
     }
   ).responses;
 
-  if (maybeResponses && typeof maybeResponses.create === "function") {
+  const shouldUseResponsesApi =
+    (isFirstPartyOpenAI || isAzureOpenAI) &&
+    maybeResponses &&
+    typeof maybeResponses.create === "function";
+
+  if (shouldUseResponsesApi) {
     // Attempt to use the native Responses API directly.
     try {
       return maybeResponses.create(input) as unknown as

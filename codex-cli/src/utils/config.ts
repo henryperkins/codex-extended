@@ -71,6 +71,60 @@ export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 export const AZURE_OPENAI_API_VERSION =
   process.env["AZURE_OPENAI_API_VERSION"] || "2025-04-01-preview";
 
+/**
+ * Validates Azure-specific configuration and provides helpful warnings
+ */
+export function validateAzureConfiguration(): {
+  valid: boolean;
+  warnings: string[];
+  isAzureEnvironment: boolean;
+} {
+  const warnings: string[] = [];
+  const isAzureEnvironment = !!(process.env["AZURE_OPENAI_BASE_URL"] || process.env["AZURE_BASE_URL"]);
+  
+  if (isAzureEnvironment) {
+    // Check for extraction deployment configuration
+    if (!process.env["AZURE_EXTRACTION_DEPLOYMENT"]) {
+      warnings.push(
+        "Azure environment detected but AZURE_EXTRACTION_DEPLOYMENT not set.\n" +
+        "Content extraction will use your primary model deployment which may be less efficient."
+      );
+    }
+    
+    // Check for search API configuration
+    if (!process.env["BRAVE_SEARCH_API_KEY"] && !process.env["SERP_API_KEY"]) {
+      warnings.push(
+        "No web search API configured. Consider setting BRAVE_SEARCH_API_KEY (recommended).\n" +
+        "Get a free API key at: https://brave.com/search/api/\n" +
+        "Currently using limited DuckDuckGo fallback for web searches."
+      );
+    }
+    
+    // Check for API version
+    const apiVersion = process.env["AZURE_OPENAI_API_VERSION"];
+    if (apiVersion && apiVersion < "2025-04-01-preview") {
+      warnings.push(
+        `Using older Azure OpenAI API version: ${apiVersion}.\n` +
+        "Consider updating to '2025-04-01-preview' or later for latest features."
+      );
+    }
+    
+    // Check for deployment name in model configuration
+    if (process.env["OPENAI_MODEL"] && process.env["OPENAI_MODEL"].includes("gpt-")) {
+      warnings.push(
+        "OPENAI_MODEL appears to use OpenAI model names (e.g., 'gpt-4').\n" +
+        "For Azure, use your deployment names instead of model names."
+      );
+    }
+  }
+  
+  return {
+    valid: warnings.length === 0,
+    warnings,
+    isAzureEnvironment
+  };
+}
+
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
 export const OPENAI_PROJECT = process.env["OPENAI_PROJECT"] || "";

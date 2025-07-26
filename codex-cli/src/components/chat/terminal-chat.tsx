@@ -15,6 +15,12 @@ import { useTerminalSize } from "../../hooks/use-terminal-size.js";
 import { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { ReviewDecision } from "../../utils/agent/review.js";
 import { generateCompactSummary } from "../../utils/compact-summary.js";
+import { 
+  performProgressiveCompaction, 
+  getCompactionLevel, 
+  CompactionLevel,
+  getModelMaxTokens 
+} from "../../utils/progressive-compaction.js";
 import { saveConfig } from "../../utils/config.js";
 import { extractAppliedPatches as _extractAppliedPatches } from "../../utils/extract-applied-patches.js";
 import { getGitDiff } from "../../utils/get-diff.js";
@@ -39,7 +45,7 @@ import chalk from "chalk";
 import fs from "fs/promises";
 import { Box, Text } from "ink";
 import { spawn } from "node:child_process";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { inspect } from "util";
 
 export type OverlayModeType =
@@ -154,24 +160,103 @@ export default function TerminalChat({
     initialApprovalPolicy,
   );
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
+  const [hasAutoCompacted, setHasAutoCompacted] = useState(false);
+  const [isCompacting, setIsCompacting] = useState(false);
 
-  const handleCompact = async () => {
+  const contextLeftPercent = useMemo(
+    () => calculateContextPercentRemaining(items, model),
+    [items, model],
+  );
+
+  const handleCompact = useCallback(async (isAutomatic = false, _customInstructions?: string) => {
+    if (isCompacting) return; // Prevent multiple compactions
+    
+    setIsCompacting(true);
     setLoading(true);
+    
     try {
-      const summary = await generateCompactSummary(
-        items,
-        model,
-        Boolean(config.flexMode),
-        config,
-      );
-      setItems([
-        {
-          id: `compact-${Date.now()}`,
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: summary }],
-        } as ResponseItem,
-      ]);
+      const contextUsagePercent = 100 - contextLeftPercent;
+      const compactionLevel = getCompactionLevel(contextUsagePercent);
+      
+      // Add notification for automatic compaction
+      if (isAutomatic) {
+        const levelEmoji = compactionLevel >= CompactionLevel.HEAVY ? "⚠️" : "🔄";
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `auto-compact-notice-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              { 
+                type: "input_text", 
+                text: `${levelEmoji} Context usage at ${contextUsagePercent.toFixed(1)}%. Applying ${CompactionLevel[compactionLevel]} compaction...` 
+              },
+            ],
+          } as ResponseItem,
+        ]);
+      }
+      
+      // Use progressive compaction for automatic compaction
+      if (isAutomatic && compactionLevel !== CompactionLevel.NONE) {
+        const maxTokens = getModelMaxTokens(model);
+        const { compactedItems, level, tokensFreed } = await performProgressiveCompaction(
+          items,
+          model,
+          config,
+          contextUsagePercent,
+          maxTokens
+        );
+        
+        setItems(compactedItems);
+        
+        // Add completion notice
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `compact-complete-${Date.now()}`,
+            type: "message",
+            role: "system",
+            content: [
+              { 
+                type: "input_text", 
+                text: `✅ Compaction complete. Freed ${tokensFreed} tokens using ${CompactionLevel[level]} level.` 
+              },
+            ],
+          } as ResponseItem,
+        ]);
+      } else {
+        // Manual compaction or when progressive isn't needed
+        const summary = await generateCompactSummary(
+          items,
+          model,
+          Boolean(config.flexMode),
+          config,
+        );
+        
+        // Keep the last few messages for continuity
+        const recentMessages = items.slice(-5).filter(
+          item => item.type === "message" && 
+          (item.role === "user" || item.role === "assistant")
+        );
+        
+        setItems([
+          {
+            id: `compact-${Date.now()}`,
+            type: "message",
+            role: "assistant",
+            content: [{ 
+              type: "output_text", 
+              text: `${isAutomatic ? '**[Auto-Compacted Context]**\n\n' : ''}${summary}` 
+            }],
+          } as ResponseItem,
+          ...recentMessages,
+        ]);
+      }
+      
+      if (isAutomatic) {
+        setHasAutoCompacted(true);
+      }
     } catch (err) {
       setItems((prev) => [
         ...prev,
@@ -186,8 +271,9 @@ export default function TerminalChat({
       ]);
     } finally {
       setLoading(false);
+      setIsCompacting(false);
     }
-  };
+  }, [isCompacting, items, model, config, contextLeftPercent]);
 
   const {
     requestConfirmation,
@@ -455,10 +541,39 @@ export default function TerminalChat({
     (i) => i.type === "message" && i.role === "user",
   ).length;
 
-  const contextLeftPercent = useMemo(
-    () => calculateContextPercentRemaining(items, model),
-    [items, model],
-  );
+  // Progressive automatic context compaction
+  useEffect(() => {
+    const contextUsagePercent = 100 - contextLeftPercent;
+    const compactionLevel = getCompactionLevel(contextUsagePercent);
+    
+    // Trigger compaction based on level thresholds
+    if (
+      compactionLevel !== CompactionLevel.NONE &&
+      !isCompacting && 
+      !loading &&
+      items.length > 10
+    ) {
+      // Check if we should compact at this level
+      const shouldCompact = 
+        (compactionLevel === CompactionLevel.LIGHT && contextUsagePercent >= 70 && !hasAutoCompacted) ||
+        (compactionLevel === CompactionLevel.MEDIUM && contextUsagePercent >= 80) ||
+        (compactionLevel === CompactionLevel.HEAVY && contextUsagePercent >= 90) ||
+        (compactionLevel === CompactionLevel.CRITICAL && contextUsagePercent >= 95);
+      
+      if (shouldCompact) {
+        log(`Progressive compaction: Level ${CompactionLevel[compactionLevel]} at ${contextUsagePercent.toFixed(1)}% usage`);
+        handleCompact(true);
+      }
+    }
+  }, [contextLeftPercent, hasAutoCompacted, isCompacting, loading, items.length, handleCompact]);
+  
+  // Reset auto-compaction flag when context usage goes back below 50%
+  useEffect(() => {
+    if (contextLeftPercent > 50 && hasAutoCompacted) {
+      setHasAutoCompacted(false);
+      log("Reset auto-compaction flag: context usage below 50%");
+    }
+  }, [contextLeftPercent, hasAutoCompacted]);
 
   if (viewRollout) {
     return (
@@ -546,7 +661,9 @@ export default function TerminalChat({
               // Ensure no overlay is shown.
               setOverlayMode("none");
             }}
-            onCompact={handleCompact}
+            onCompact={(customInstructions?: string) => {
+              handleCompact(false, customInstructions);
+            }}
             active={overlayMode === "none"}
             interruptAgent={() => {
               if (!agent) {

@@ -17,7 +17,10 @@ export async function fetchUrl(url: string): Promise<string> {
     return res.text();
   } catch (error) {
     if (error instanceof TypeError && error.message.includes("fetch")) {
-      throw new Error("Network access may be restricted. Unable to fetch URL.");
+      throw new Error(
+        "Network access may be restricted. Unable to fetch URL.\n" +
+        "If using Azure, ensure your network security group allows outbound HTTPS traffic."
+      );
     }
     throw error;
   }
@@ -27,9 +30,9 @@ export async function fetchUrl(url: string): Promise<string> {
  * Perform a web search using one of the supported third-party APIs.  The
  * implementation tries the providers in the following order until a matching
  * API key is found in the environment:
- *   1. Brave Search – `BRAVE_SEARCH_API_KEY`
- *   2. SerpAPI         `SERP_API_KEY`
- *   3. Bing Web Search `BING_SEARCH_API_KEY`
+ *   1. Brave Search – `BRAVE_SEARCH_API_KEY` (Recommended)
+ *   2. SerpAPI – `SERP_API_KEY`
+ *   3. DuckDuckGo (Fallback - no API key required)
  */
 export async function searchWeb(query: string): Promise<string> {
   const brave = process.env["BRAVE_SEARCH_API_KEY"];
@@ -42,19 +45,21 @@ export async function searchWeb(query: string): Promise<string> {
     return searchWebSerp(query, serp);
   }
 
-  const bing = process.env["BING_SEARCH_API_KEY"];
-  if (bing) {
-    return searchWebBing(query, bing);
-  }
-
   // -----------------------------------------------------------------------
   // Fallback: DuckDuckGo Instant-Answer API (no key required)
   // -----------------------------------------------------------------------
   // The CLI might run in an environment where no paid search-API key is
-  // configured.  Rather than failing outright we fall back to DuckDuckGo’s
+  // configured.  Rather than failing outright we fall back to DuckDuckGo's
   // public JSON endpoint.  While the Instant-Answer API is not a full web
   // search it still provides useful snippets and links that unblock the
   // `web_search` tool for ad-hoc queries.
+
+  // Warn when falling back to DuckDuckGo
+  console.warn(
+    "Using DuckDuckGo fallback for web search (limited results).\n" +
+    "For better results, set BRAVE_SEARCH_API_KEY (recommended) or SERP_API_KEY.\n" +
+    "Get a free Brave Search API key at: https://brave.com/search/api/"
+  );
 
   try {
     return await searchWebDuckDuckGo(query);
@@ -63,9 +68,11 @@ export async function searchWeb(query: string): Promise<string> {
     // higher-quality providers.
     const msg =
       error instanceof Error ? error.message : String(error ?? "unknown");
+    
     throw new Error(
       `DuckDuckGo fallback failed (${msg}). ` +
-        "Please set BRAVE_SEARCH_API_KEY, SERP_API_KEY, or BING_SEARCH_API_KEY to enable full web search support.",
+        "Please set BRAVE_SEARCH_API_KEY (recommended) or SERP_API_KEY to enable full web search support.\n" +
+        "Get a free Brave Search API key at: https://brave.com/search/api/",
     );
   }
 }
@@ -252,48 +259,3 @@ async function searchWebSerp(query: string, apiKey: string): Promise<string> {
   return results || "No results found.";
 }
 
-async function searchWebBing(query: string, apiKey: string): Promise<string> {
-  const endpoint = "https://api.bing.microsoft.com/v7.0/search";
-  const url = `${endpoint}?q=${encodeURIComponent(query)}&count=5`;
-
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: {
-        "Ocp-Apim-Subscription-Key": apiKey,
-      },
-    });
-  } catch (error) {
-    if (error instanceof TypeError && error.message.includes("fetch")) {
-      throw new Error(
-        "Network access may be restricted. Unable to reach Bing Search API.",
-      );
-    }
-    throw error;
-  }
-
-  if (!res.ok) {
-    throw new Error(`Bing Search API error: ${res.status}`);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let data: any;
-  try {
-    data = await res.json();
-  } catch (error) {
-    throw new Error(`Failed to parse JSON response from Bing Search API`);
-  }
-
-  let results = `Search results for: "${query}"\n\n`;
-
-  if (data.webPages?.value) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    data.webPages.value.forEach((result: any, i: number) => {
-      results += `${i + 1}. **${result.name}**\n`;
-      results += `   URL: ${result.url}\n`;
-      results += `   ${result.snippet}\n\n`;
-    });
-  }
-
-  return results || "No results found.";
-}

@@ -1,6 +1,7 @@
 import type { ReviewDecision } from "./review.js";
 import type { ApplyPatchCommand, ApprovalPolicy } from "../../approvals.js";
 import type { AppConfig } from "../config.js";
+import type { ExecInput } from "./sandbox/interface.js";
 import type { ResponseEvent } from "../responses.js";
 import type {
   ResponseFunctionToolCall,
@@ -35,11 +36,19 @@ import {
   searchWebStructured,
   truncateForAzure,
 } from "../structured-helpers.js";
+import { selectToolsForQuery } from "../tool-selection.js";
+import { Scratchpad } from "../scratchpad.js";
+import { scratchpadTool, handleScratchpadTool } from "../scratchpad-tool.js";
+import { TodoList } from "../todo-list.js";
+import { todoListTool, handleTodoListTool, type TodoListArgs } from "../todo-list-tool.js";
+import { ToolExecutionError, ERROR_CODES, getErrorMessage, getExpectedFormat, getToolExample } from "../tool-errors.js";
+import { toolsInfoTool, handleToolsInfo } from "../tools-info-tool.js";
 import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 import os from "os";
 
@@ -96,7 +105,12 @@ type AgentLoopParams = {
 const shellFunctionTool: FunctionTool = {
   type: "function",
   name: "shell",
-  description: "Runs a shell command, and returns its output.",
+  description: `Runs a shell command, and returns its output.
+Examples:
+• List files: {"command":["ls","-la"]}
+• Run tests: {"command":["npm","test"]}
+• Search code: {"command":["rg","-F","searchterm"]}
+• Check git: {"command":["git","status"]}`,
   strict: false,
   parameters: {
     type: "object",
@@ -132,8 +146,10 @@ const localShellTool: Tool = {
 const fetchUrlTool: FunctionTool = {
   type: "function",
   name: "fetch_url",
-  description:
-    "Fetches the content of a URL and returns structured data with optional synopsis and chunking for large pages.",
+  description: `Fetches the content of a URL and returns structured data with optional synopsis and chunking for large pages.
+Examples:
+• Fetch page: {"url":"https://example.com"}
+• API docs: {"url":"https://api.example.com/docs"}`,
   strict: false,
   parameters: {
     type: "object",
@@ -151,8 +167,10 @@ const fetchUrlTool: FunctionTool = {
 const webSearchTool: FunctionTool = {
   type: "function",
   name: "web_search",
-  description:
-    "Searches the web and returns structured results with URLs, titles, and snippets.",
+  description: `Searches the web and returns structured results with URLs, titles, and snippets.
+Examples:
+• Search docs: {"query":"OpenAI function calling"}
+• Find info: {"query":"TypeScript error handling best practices"}`,
   strict: false,
   parameters: {
     type: "object",
@@ -224,6 +242,12 @@ export class AgentLoop {
   private terminated = false;
   /** Master abort controller – fires when terminate() is invoked. */
   private readonly hardAbort = new AbortController();
+  
+  /** Scratchpad for persisting state during agent execution */
+  private scratchpad: Scratchpad;
+  
+  /** TodoList for task tracking during agent execution */
+  private todoList: TodoList;
 
   /**
    * Abort the ongoing request/stream, if any. This allows callers (typically
@@ -386,6 +410,18 @@ export class AgentLoop {
 
     this.disableResponseStorage = disableResponseStorage ?? false;
     this.sessionId = getSessionId() || randomUUID().replaceAll("-", "");
+    
+    // Initialize scratchpad for this session
+    this.scratchpad = new Scratchpad(this.sessionId);
+    this.scratchpad.load().catch(() => {
+      // Ignore errors loading previous scratchpad
+    });
+    
+    // Initialize todo list for this session
+    this.todoList = new TodoList({
+      filePath: join(os.tmpdir(), `codex-todo-${this.sessionId}.json`),
+      autoSave: true
+    });
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = getApiKey(this.provider) ?? "";
@@ -498,17 +534,39 @@ export class AgentLoop {
     if (name === "container.exec" || name === "shell") {
       // Shell commands need special parsing for cmd/command properties
       args = parseToolCallArguments(rawArguments ?? "{}");
-    } else if (name === "fetch_url" || name === "web_search") {
-      // Web tools use standard JSON arguments
+    } else if (name === "fetch_url" || name === "web_search" || name === "scratchpad" || name === "todo_list" || name === "tools_info") {
+      // Web tools and other JSON-based tools use standard JSON arguments
       try {
+        // First attempt with raw arguments
         args = JSON.parse(rawArguments ?? "{}");
       } catch (error) {
+        // Try to fix common JSON issues
+        try {
+          const sanitized = (rawArguments ?? "{}")
+            .replace(/\n/g, '\\n')  // Escape newlines
+            .replace(/\t/g, '\\t')  // Escape tabs
+            .replace(/\r/g, '\\r'); // Escape carriage returns
+          args = JSON.parse(sanitized);
+        } catch (secondError) {
+          const toolError = new ToolExecutionError(
+          ERROR_CODES.INVALID_JSON,
+          getErrorMessage(ERROR_CODES.INVALID_JSON, name || 'unknown'),
+          {
+            tool: name || 'unknown',
+            expectedFormat: getExpectedFormat(name || 'unknown'),
+            receivedValue: rawArguments,
+            suggestion: `Check your JSON syntax. ${name === 'todo_list' ? 'Make sure multi-line content is properly escaped.' : ''}`,
+            example: getToolExample(name || 'unknown')
+          }
+        );
+        
         const outputItem: ResponseInputItem.FunctionCallOutput = {
           type: "function_call_output",
           call_id: item.call_id,
-          output: `invalid arguments: ${rawArguments}`,
+          output: JSON.stringify(toolError.toJSON()),
         };
         return [outputItem];
+        }
       }
     } else {
       // Default to shell command parsing for unknown functions
@@ -553,13 +611,52 @@ export class AgentLoop {
     const additionalItems: Array<ResponseInputItem> = [];
 
     // TODO: allow arbitrary function calls (beyond shell/container.exec)
-    if (name === "container.exec" || name === "shell") {
+    if (name === "scratchpad") {
+      try {
+        const result = await handleScratchpadTool(args, this.scratchpad);
+        outputItem.output = JSON.stringify({
+          output: result,
+          metadata: { tool: "scratchpad" }
+        });
+      } catch (error) {
+        outputItem.output = JSON.stringify({
+          output: `Scratchpad error: ${error}`,
+          metadata: { error: true }
+        });
+      }
+    } else if (name === "todo_list") {
+      try {
+        const result = await handleTodoListTool(args as TodoListArgs, this.todoList);
+        outputItem.output = JSON.stringify({
+          output: result,
+          metadata: { tool: "todo_list" }
+        });
+      } catch (error) {
+        outputItem.output = JSON.stringify({
+          output: `Todo list error: ${error}`,
+          metadata: { error: true }
+        });
+      }
+    } else if (name === "tools_info") {
+      try {
+        const result = await handleToolsInfo(args);
+        outputItem.output = JSON.stringify({
+          output: result,
+          metadata: { tool: "tools_info" }
+        });
+      } catch (error) {
+        outputItem.output = JSON.stringify({
+          output: `Tools info error: ${error}`,
+          metadata: { error: true }
+        });
+      }
+    } else if (name === "container.exec" || name === "shell") {
       const {
         outputText,
         metadata,
         additionalItems: additionalItemsFromExec,
       } = await handleExecCommand(
-        args,
+        args as ExecInput,
         this.config,
         this.approvalPolicy,
         this.additionalWritableRoots,
@@ -610,8 +707,15 @@ export class AgentLoop {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : String(error ?? "unknown");
+        let errorOutput = `Error fetching URL: ${message}`;
+        
+        // Add Azure-specific guidance
+        if (this.provider.toLowerCase() === "azure" && message.includes("extraction failed")) {
+          errorOutput += "\n\nFor Azure OpenAI: Check AZURE_EXTRACTION_DEPLOYMENT environment variable.";
+        }
+        
         outputItem.output = JSON.stringify({
-          output: `Error fetching URL: ${message}`,
+          output: errorOutput,
           metadata: { error: true },
         });
       }
@@ -836,10 +940,62 @@ export class AgentLoop {
           }
         : webSearchTool;
 
-      if (this.model.startsWith("codex")) {
-        tools = [localShellTool, azureFetchTool, azureSearchTool];
+      // Extract user query for tool selection
+      let userQuery = "";
+      for (const item of input) {
+        if (item.type === "message" && item.role === "user") {
+          const content = item.content;
+          if (Array.isArray(content)) {
+            for (const c of content) {
+              if (c.type === "input_text") {
+                userQuery += c.text + " ";
+              }
+            }
+          }
+        }
+      }
+      
+      // Use intelligent tool selection if we have a user query
+      if (userQuery.trim()) {
+        // allTools is defined but not used in the current implementation
+        // const allTools = this.model.startsWith("codex") 
+        //   ? [localShellTool, scratchpadTool, azureFetchTool, azureSearchTool]
+        //   : [shellFunctionTool, scratchpadTool, azureFetchTool, azureSearchTool];
+        
+        // Map tool names to tools for selection
+        const toolMap = new Map<string, Tool>();
+        toolMap.set("shell", this.model.startsWith("codex") ? localShellTool : shellFunctionTool);
+        toolMap.set("scratchpad", scratchpadTool);
+        toolMap.set("todo_list", todoListTool);
+        toolMap.set("fetch_url", azureFetchTool);
+        toolMap.set("web_search", azureSearchTool);
+        
+        // Select relevant tools based on query (increased to 3 tools max)
+        const selectedTools = selectToolsForQuery(userQuery.trim(), 3, 3);
+        const selectedNames = new Set(selectedTools.map(t => (t as FunctionTool).name));
+        
+        // Map selected tools back to our tool instances
+        tools = [];
+        for (const [name, tool] of toolMap.entries()) {
+          if (selectedNames.has(name)) {
+            tools.push(tool);
+          }
+        }
+        
+        // Always include shell tool as fallback
+        if (tools.length === 0 || !selectedNames.has("shell")) {
+          tools.unshift(this.model.startsWith("codex") ? localShellTool : shellFunctionTool);
+        }
+        
+        log(`Tool selection for query: "${userQuery.trim().substring(0, 100)}..."`);
+        log(`Selected tools: ${tools.map(t => (t as FunctionTool).name || t.type).join(", ")}`);
       } else {
-        tools = [shellFunctionTool, azureFetchTool, azureSearchTool];
+        // No user query, use all tools
+        if (this.model.startsWith("codex")) {
+          tools = [localShellTool, scratchpadTool, todoListTool, toolsInfoTool, azureFetchTool, azureSearchTool];
+        } else {
+          tools = [shellFunctionTool, scratchpadTool, todoListTool, toolsInfoTool, azureFetchTool, azureSearchTool];
+        }
       }
 
       const stripInternalFields = (

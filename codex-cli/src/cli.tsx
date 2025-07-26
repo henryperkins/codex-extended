@@ -22,6 +22,7 @@ import type { AppRollout } from "./app";
 import type { ApprovalPolicy } from "./approvals";
 import type { CommandConfirmation } from "./utils/agent/agent-loop";
 import type { AppConfig } from "./utils/config";
+import { validateAzureConfiguration } from "./utils/config";
 import type { ResponseItem } from "openai/resources/responses/responses";
 import type { ReasoningEffort } from "openai/resources.mjs";
 
@@ -284,6 +285,17 @@ let config = loadConfig(undefined, undefined, {
   projectDocPath: cli.flags.projectDoc,
   isFullContext: fullContextMode,
 });
+
+// Validate Azure configuration if applicable
+const azureValidation = validateAzureConfiguration();
+if (azureValidation.isAzureEnvironment && azureValidation.warnings.length > 0) {
+  // Display warnings in yellow/warning color
+  console.warn("\n⚠️  Azure Configuration Warnings:");
+  azureValidation.warnings.forEach(warning => {
+    console.warn(`\n${warning}`);
+  });
+  console.warn("\n"); // Add spacing
+}
 
 // `prompt` can be updated later when the user resumes a previous session
 // via the `--history` flag. Therefore it must be declared with `let` rather

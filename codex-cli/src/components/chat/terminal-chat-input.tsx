@@ -79,7 +79,7 @@ export default function TerminalChatInput({
   openHelpOverlay: () => void;
   openDiffOverlay: () => void;
   openSessionsOverlay: () => void;
-  onCompact: () => void;
+  onCompact: (customInstructions?: string) => void;
   interruptAgent: () => void;
   active: boolean;
   thinkingSeconds: number;
@@ -501,9 +501,13 @@ export default function TerminalChatInput({
         setInput("");
         openDiffOverlay();
         return;
-      } else if (inputValue === "/compact") {
+      } else if (inputValue === "/compact" || inputValue.startsWith("/compact ")) {
         setInput("");
-        onCompact();
+        // Extract custom instructions if provided
+        const customInstructions = inputValue.startsWith("/compact ") 
+          ? inputValue.substring("/compact ".length).trim()
+          : undefined;
+        onCompact(customInstructions);
         return;
       } else if (inputValue.startsWith("/model")) {
         setInput("");
@@ -855,7 +859,7 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>
             ctrl+c to exit | "/" to see commands | enter to send
-            {contextLeftPercent > 25 && (
+            {contextLeftPercent <= 75 && contextLeftPercent > 25 && (
               <>
                 {" — "}
                 <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
@@ -863,12 +867,21 @@ export default function TerminalChatInput({
                 </Text>
               </>
             )}
-            {contextLeftPercent <= 25 && (
+            {contextLeftPercent <= 25 && contextLeftPercent > 10 && (
               <>
                 {" — "}
                 <Text color="red">
                   {Math.round(contextLeftPercent)}% context left — send
                   "/compact" to condense context
+                </Text>
+              </>
+            )}
+            {contextLeftPercent <= 10 && (
+              <>
+                {" — "}
+                <Text color="red" bold>
+                  {Math.round(contextLeftPercent)}% context left — auto-compact
+                  will trigger soon
                 </Text>
               </>
             )}

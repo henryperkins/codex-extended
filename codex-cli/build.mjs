@@ -83,6 +83,6 @@ esbuild
     minify: !isDevBuild,
     sourcemap: isDevBuild ? "inline" : true,
     plugins,
-    inject: ["./require-shim.js"],
+    inject: ["./require-shim.js"]
   })
   .catch(() => process.exit(1));
