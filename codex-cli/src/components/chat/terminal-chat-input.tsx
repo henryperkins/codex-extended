@@ -8,6 +8,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 
 import MultilineTextEditor from "./multiline-editor";
+import { ContextVisualizer } from "../visual";
 import { TerminalChatCommandReview } from "./terminal-chat-command-review.js";
 import TextCompletions from "./terminal-chat-completions.js";
 import { loadConfig } from "../../utils/config.js";
@@ -15,6 +16,7 @@ import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js
 import { expandFileTags } from "../../utils/file-tag-utils";
 import { createInputItem } from "../../utils/input-utils.js";
 import { log } from "../../utils/logger/log.js";
+import { maxTokensForModel } from "../../utils/model-utils";
 import { setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
@@ -22,6 +24,7 @@ import {
   addToHistory,
 } from "../../utils/storage/command-history.js";
 import { clearTerminal, onExit } from "../../utils/terminal.js";
+import { countTokensUsed } from "../../utils/token-counter";
 import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { fileURLToPath } from "node:url";
 import React, {
@@ -60,6 +63,7 @@ export default function TerminalChatInput({
   active,
   thinkingSeconds,
   items = [],
+  model = "gpt-4",
 }: {
   isNew: boolean;
   loading: boolean;
@@ -85,6 +89,7 @@ export default function TerminalChatInput({
   thinkingSeconds: number;
   // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
+  model?: string;
 }): React.ReactElement {
   // Slash command suggestion index
   const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
@@ -752,6 +757,13 @@ export default function TerminalChatInput({
     ],
   );
 
+  // Calculate token usage for context visualization
+  const tokenUsage = React.useMemo(() => {
+    const used = countTokensUsed(items, model);
+    const total = maxTokensForModel(model);
+    return { used, total };
+  }, [items, model]);
+
   if (confirmationPrompt) {
     return (
       <TerminalChatCommandReview
@@ -765,6 +777,8 @@ export default function TerminalChatInput({
       />
     );
   }
+
+  const showContextVisualizer = contextLeftPercent <= 75;
 
   return (
     <Box flexDirection="column">
@@ -862,35 +876,22 @@ export default function TerminalChatInput({
         ) : (
           <Text dimColor>
             ctrl+c to exit | "/" to see commands | enter to send
-            {contextLeftPercent <= 75 && contextLeftPercent > 25 && (
+            {!showContextVisualizer && contextLeftPercent > 75 && (
               <>
                 {" — "}
-                <Text color={contextLeftPercent > 40 ? "green" : "yellow"}>
+                <Text color="green">
                   {Math.round(contextLeftPercent)}% context left
-                </Text>
-              </>
-            )}
-            {contextLeftPercent <= 25 && contextLeftPercent > 10 && (
-              <>
-                {" — "}
-                <Text color="red">
-                  {Math.round(contextLeftPercent)}% context left — send
-                  "/compact" to condense context
-                </Text>
-              </>
-            )}
-            {contextLeftPercent <= 10 && (
-              <>
-                {" — "}
-                <Text color="red" bold>
-                  {Math.round(contextLeftPercent)}% context left — auto-compact
-                  will trigger soon
                 </Text>
               </>
             )}
           </Text>
         )}
       </Box>
+      {showContextVisualizer && (
+        <Box paddingX={2} marginTop={1}>
+          <ContextVisualizer used={tokenUsage.used} total={tokenUsage.total} />
+        </Box>
+      )}
     </Box>
   );
 }

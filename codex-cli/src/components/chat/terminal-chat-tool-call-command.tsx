@@ -1,7 +1,8 @@
 import { parseApplyPatch } from "../../parse-apply-patch";
 import { shortenPath } from "../../utils/short-path";
+import { SmartOutputViewer } from "../visual";
 import chalk from "chalk";
-import { Text } from "ink";
+import { Text, Box } from "ink";
 import React from "react";
 
 export function TerminalChatToolCallCommand({
@@ -32,47 +33,52 @@ export function TerminalChatToolCallCommand({
     .join("\n");
 
   return (
-    <>
+    <Box flexDirection="column" gap={1}>
       <Text bold color="green">
         Shell Command
       </Text>
-      <Text>
-        <Text dimColor>$</Text> {colorizedCommand}
-      </Text>
+      <SmartOutputViewer
+        content={`$ ${colorizedCommand}`}
+        maxInitialLines={10}
+        preservePatterns={[/^\+/, /^-/]}
+        highlightErrors={false}
+      />
       {explanation && (
         <>
           <Text bold color="yellow">
             Explanation
           </Text>
-          {explanation.split("\n").map((line, i) => {
-            // Apply different styling to headings (numbered items)
-            if (line.match(/^\d+\.\s+/)) {
-              return (
-                <Text key={i} bold color="cyan">
-                  {line}
-                </Text>
-              );
-            } else if (line.match(/^\s*\*\s+/)) {
-              // Style bullet points
-              return (
-                <Text key={i} color="magenta">
-                  {line}
-                </Text>
-              );
-            } else if (line.match(/^(WARNING|CAUTION|NOTE):/i)) {
-              // Style warnings
-              return (
-                <Text key={i} bold color="red">
-                  {line}
-                </Text>
-              );
-            } else {
-              return <Text key={i}>{line}</Text>;
-            }
-          })}
+          <Box flexDirection="column">
+            {explanation.split("\n").map((line, i) => {
+              // Apply different styling to headings (numbered items)
+              if (line.match(/^\d+\.\s+/)) {
+                return (
+                  <Text key={i} bold color="cyan">
+                    {line}
+                  </Text>
+                );
+              } else if (line.match(/^\s*\*\s+/)) {
+                // Style bullet points
+                return (
+                  <Text key={i} color="magenta">
+                    {line}
+                  </Text>
+                );
+              } else if (line.match(/^(WARNING|CAUTION|NOTE):/i)) {
+                // Style warnings
+                return (
+                  <Text key={i} bold color="red">
+                    {line}
+                  </Text>
+                );
+              } else {
+                return <Text key={i}>{line}</Text>;
+              }
+            })}
+          </Box>
         </>
       )}
-    </>
+    </Box>
   );
 }
 
@@ -102,15 +108,19 @@ export function TerminalChatToolCallApplyPatch({
 
   if (ops == null) {
     return (
-      <>
+      <Box flexDirection="column">
         <Text bold color="red">
           Invalid Patch
         </Text>
         <Text color="red" dimColor>
           The provided patch command is invalid.
         </Text>
-        <Text dimColor>{commandForDisplay}</Text>
-      </>
+        <SmartOutputViewer
+          content={commandForDisplay}
+          maxInitialLines={5}
+          highlightErrors={true}
+        />
+      </Box>
     );
   }
 

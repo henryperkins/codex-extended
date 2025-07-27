@@ -41,6 +41,7 @@ import HelpOverlay from "../help-overlay.js";
 import HistoryOverlay from "../history-overlay.js";
 import ModelOverlay from "../model-overlay.js";
 import SessionsOverlay from "../sessions-overlay.js";
+import { ResponsiveLayout } from "../visual";
 import chalk from "chalk";
 import fs from "fs/promises";
 import { Box, Text } from "ink";
@@ -618,298 +619,304 @@ export default function TerminalChat({
   }
 
   return (
-    <Box flexDirection="column">
+    <ResponsiveLayout showContextVisualizer={false} showTimeline={false}>
       <Box flexDirection="column">
-        {agent ? (
-          <TerminalMessageHistory
-            setOverlayMode={setOverlayMode}
-            batch={lastMessageBatch}
-            groupCounts={groupCounts}
-            items={items}
-            userMsgCount={userMsgCount}
-            confirmationPrompt={confirmationPrompt}
-            loading={loading}
-            thinkingSeconds={thinkingSeconds}
-            fullStdout={fullStdout}
-            headerProps={{
-              terminalRows,
-              version: CLI_VERSION,
-              PWD,
-              model,
-              provider,
-              approvalPolicy,
-              colorsByPolicy,
-              agent,
-              initialImagePaths,
-              flexModeEnabled: Boolean(config.flexMode),
-            }}
-            fileOpener={config.fileOpener}
-          />
-        ) : (
-          <Box>
-            <Text color="gray">Initializing agent…</Text>
-          </Box>
-        )}
-        {overlayMode === "none" && agent && (
-          <TerminalChatInput
-            loading={loading}
-            setItems={setItems}
-            isNew={Boolean(items.length === 0)}
-            setLastResponseId={setLastResponseId}
-            confirmationPrompt={confirmationPrompt}
-            explanation={explanation}
-            submitConfirmation={(
-              decision: ReviewDecision,
-              customDenyMessage?: string,
-            ) =>
-              submitConfirmation({
-                decision,
-                customDenyMessage,
-              })
-            }
-            contextLeftPercent={contextLeftPercent}
-            openOverlay={() => setOverlayMode("history")}
-            openModelOverlay={() => setOverlayMode("model")}
-            openApprovalOverlay={() => setOverlayMode("approval")}
-            openHelpOverlay={() => setOverlayMode("help")}
-            openSessionsOverlay={() => setOverlayMode("sessions")}
-            openDiffOverlay={() => {
-              const { isGitRepo, diff } = getGitDiff();
-              let text: string;
-              if (isGitRepo) {
-                text = diff;
-              } else {
-                text = "`/diff` — _not inside a git repository_";
+        <Box flexDirection="column">
+          {agent ? (
+            <TerminalMessageHistory
+              setOverlayMode={setOverlayMode}
+              batch={lastMessageBatch}
+              groupCounts={groupCounts}
+              items={items}
+              userMsgCount={userMsgCount}
+              confirmationPrompt={confirmationPrompt}
+              loading={loading}
+              thinkingSeconds={thinkingSeconds}
+              fullStdout={fullStdout}
+              headerProps={{
+                terminalRows,
+                version: CLI_VERSION,
+                PWD,
+                model,
+                provider,
+                approvalPolicy,
+                colorsByPolicy,
+                agent,
+                initialImagePaths,
+                flexModeEnabled: Boolean(config.flexMode),
+              }}
+              fileOpener={config.fileOpener}
+            />
+          ) : (
+            <Box>
+              <Text color="gray">Initializing agent…</Text>
+            </Box>
+          )}
+          {overlayMode === "none" && agent && (
+            <TerminalChatInput
+              loading={loading}
+              setItems={setItems}
+              isNew={Boolean(items.length === 0)}
+              setLastResponseId={setLastResponseId}
+              confirmationPrompt={confirmationPrompt}
+              explanation={explanation}
+              submitConfirmation={(
+                decision: ReviewDecision,
+                customDenyMessage?: string,
+              ) =>
+                submitConfirmation({
+                  decision,
+                  customDenyMessage,
+                })
               }
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `diff-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [{ type: "input_text", text }],
-                },
-              ]);
-              // Ensure no overlay is shown.
-              setOverlayMode("none");
-            }}
-            onCompact={(customInstructions?: string) => {
-              handleCompact(false, customInstructions);
-            }}
-            active={overlayMode === "none"}
-            interruptAgent={() => {
-              if (!agent) {
-                return;
-              }
-              log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-              );
-              agent.cancel();
-              setLoading(false);
-
-              // Add a system message to indicate the interruption
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `interrupt-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: "⏹️  Execution interrupted by user. You can continue typing.",
-                    },
-                  ],
-                },
-              ]);
-            }}
-            submitInput={(inputs) => {
-              agent.run(inputs, lastResponseId || "");
-              return {};
-            }}
-            items={items}
-            thinkingSeconds={thinkingSeconds}
-          />
-        )}
-        {overlayMode === "history" && (
-          <HistoryOverlay items={items} onExit={() => setOverlayMode("none")} />
-        )}
-        {overlayMode === "sessions" && (
-          <SessionsOverlay
-            onView={async (p) => {
-              try {
-                const txt = await fs.readFile(p, "utf-8");
-                const data = JSON.parse(txt) as AppRollout;
-                setViewRollout(data);
+              contextLeftPercent={contextLeftPercent}
+              items={items}
+              model={model}
+              openOverlay={() => setOverlayMode("history")}
+              openModelOverlay={() => setOverlayMode("model")}
+              openApprovalOverlay={() => setOverlayMode("approval")}
+              openHelpOverlay={() => setOverlayMode("help")}
+              openSessionsOverlay={() => setOverlayMode("sessions")}
+              openDiffOverlay={() => {
+                const { isGitRepo, diff } = getGitDiff();
+                let text: string;
+                if (isGitRepo) {
+                  text = diff;
+                } else {
+                  text = "`/diff` — _not inside a git repository_";
+                }
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `diff-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [{ type: "input_text", text }],
+                  },
+                ]);
+                // Ensure no overlay is shown.
                 setOverlayMode("none");
-              } catch {
-                setOverlayMode("none");
-              }
-            }}
-            onResume={(p) => {
-              setOverlayMode("none");
-              setInitialPrompt(`Resume this session: ${p}`);
-            }}
-            onExit={() => setOverlayMode("none")}
-          />
-        )}
-        {overlayMode === "model" && (
-          <ModelOverlay
-            currentModel={model}
-            providers={config.providers}
-            currentProvider={provider}
-            hasLastResponse={Boolean(lastResponseId)}
-            onSelect={(allModels, newModel) => {
-              log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-              );
-              if (!agent) {
-                log("TerminalChat: agent is not ready yet");
-              }
-              agent?.cancel();
-              setLoading(false);
-
-              if (!allModels?.includes(newModel)) {
-                // eslint-disable-next-line no-console
-                console.error(
-                  chalk.bold.red(
-                    `Model "${chalk.yellow(
-                      newModel,
-                    )}" is not available for provider "${chalk.yellow(
-                      provider,
-                    )}".`,
-                  ),
+              }}
+              onCompact={(customInstructions?: string) => {
+                handleCompact(false, customInstructions);
+              }}
+              active={overlayMode === "none"}
+              interruptAgent={() => {
+                if (!agent) {
+                  return;
+                }
+                log(
+                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
                 );
-                return;
-              }
+                agent.cancel();
+                setLoading(false);
 
-              setModel(newModel);
-              setLastResponseId((prev) =>
-                prev && newModel !== model ? null : prev,
-              );
+                // Add a system message to indicate the interruption
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `interrupt-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: "⏹️  Execution interrupted by user. You can continue typing.",
+                      },
+                    ],
+                  },
+                ]);
+              }}
+              submitInput={(inputs) => {
+                agent.run(inputs, lastResponseId || "");
+                return {};
+              }}
+              thinkingSeconds={thinkingSeconds}
+            />
+          )}
+          {overlayMode === "history" && (
+            <HistoryOverlay
+              items={items}
+              onExit={() => setOverlayMode("none")}
+            />
+          )}
+          {overlayMode === "sessions" && (
+            <SessionsOverlay
+              onView={async (p) => {
+                try {
+                  const txt = await fs.readFile(p, "utf-8");
+                  const data = JSON.parse(txt) as AppRollout;
+                  setViewRollout(data);
+                  setOverlayMode("none");
+                } catch {
+                  setOverlayMode("none");
+                }
+              }}
+              onResume={(p) => {
+                setOverlayMode("none");
+                setInitialPrompt(`Resume this session: ${p}`);
+              }}
+              onExit={() => setOverlayMode("none")}
+            />
+          )}
+          {overlayMode === "model" && (
+            <ModelOverlay
+              currentModel={model}
+              providers={config.providers}
+              currentProvider={provider}
+              hasLastResponse={Boolean(lastResponseId)}
+              onSelect={(allModels, newModel) => {
+                log(
+                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+                );
+                if (!agent) {
+                  log("TerminalChat: agent is not ready yet");
+                }
+                agent?.cancel();
+                setLoading(false);
 
-              // Save model to config
-              saveConfig({
-                ...config,
-                model: newModel,
-                provider: provider,
-              });
+                if (!allModels?.includes(newModel)) {
+                  // eslint-disable-next-line no-console
+                  console.error(
+                    chalk.bold.red(
+                      `Model "${chalk.yellow(
+                        newModel,
+                      )}" is not available for provider "${chalk.yellow(
+                        provider,
+                      )}".`,
+                    ),
+                  );
+                  return;
+                }
 
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-model-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Switched model to ${newModel}`,
-                    },
-                  ],
-                },
-              ]);
+                setModel(newModel);
+                setLastResponseId((prev) =>
+                  prev && newModel !== model ? null : prev,
+                );
 
-              setOverlayMode("none");
-            }}
-            onSelectProvider={(newProvider) => {
-              log(
-                "TerminalChat: interruptAgent invoked – calling agent.cancel()",
-              );
-              if (!agent) {
-                log("TerminalChat: agent is not ready yet");
-              }
-              agent?.cancel();
-              setLoading(false);
+                // Save model to config
+                saveConfig({
+                  ...config,
+                  model: newModel,
+                  provider: provider,
+                });
 
-              // Select default model for the new provider.
-              const defaultModel = model;
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `switch-model-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: `Switched model to ${newModel}`,
+                      },
+                    ],
+                  },
+                ]);
 
-              // Save provider to config.
-              const updatedConfig = {
-                ...config,
-                provider: newProvider,
-                model: defaultModel,
-              };
-              saveConfig(updatedConfig);
+                setOverlayMode("none");
+              }}
+              onSelectProvider={(newProvider) => {
+                log(
+                  "TerminalChat: interruptAgent invoked – calling agent.cancel()",
+                );
+                if (!agent) {
+                  log("TerminalChat: agent is not ready yet");
+                }
+                agent?.cancel();
+                setLoading(false);
 
-              setProvider(newProvider);
-              setModel(defaultModel);
-              setLastResponseId((prev) =>
-                prev && newProvider !== provider ? null : prev,
-              );
+                // Select default model for the new provider.
+                const defaultModel = model;
 
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-provider-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Switched provider to ${newProvider} with model ${defaultModel}`,
-                    },
-                  ],
-                },
-              ]);
+                // Save provider to config.
+                const updatedConfig = {
+                  ...config,
+                  provider: newProvider,
+                  model: defaultModel,
+                };
+                saveConfig(updatedConfig);
 
-              // Don't close the overlay so user can select a model for the new provider
-              // setOverlayMode("none");
-            }}
-            onExit={() => setOverlayMode("none")}
-          />
-        )}
+                setProvider(newProvider);
+                setModel(defaultModel);
+                setLastResponseId((prev) =>
+                  prev && newProvider !== provider ? null : prev,
+                );
 
-        {overlayMode === "approval" && (
-          <ApprovalModeOverlay
-            currentMode={approvalPolicy}
-            onSelect={(newMode) => {
-              // Update approval policy without cancelling an in-progress session.
-              if (newMode === approvalPolicy) {
-                return;
-              }
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `switch-provider-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: `Switched provider to ${newProvider} with model ${defaultModel}`,
+                      },
+                    ],
+                  },
+                ]);
 
-              setApprovalPolicy(newMode as ApprovalPolicy);
-              if (agentRef.current) {
-                (
-                  agentRef.current as unknown as {
-                    approvalPolicy: ApprovalPolicy;
-                  }
-                ).approvalPolicy = newMode as ApprovalPolicy;
-              }
-              setItems((prev) => [
-                ...prev,
-                {
-                  id: `switch-approval-${Date.now()}`,
-                  type: "message",
-                  role: "system",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Switched approval mode to ${newMode}`,
-                    },
-                  ],
-                },
-              ]);
+                // Don't close the overlay so user can select a model for the new provider
+                // setOverlayMode("none");
+              }}
+              onExit={() => setOverlayMode("none")}
+            />
+          )}
 
-              setOverlayMode("none");
-            }}
-            onExit={() => setOverlayMode("none")}
-          />
-        )}
+          {overlayMode === "approval" && (
+            <ApprovalModeOverlay
+              currentMode={approvalPolicy}
+              onSelect={(newMode) => {
+                // Update approval policy without cancelling an in-progress session.
+                if (newMode === approvalPolicy) {
+                  return;
+                }
 
-        {overlayMode === "help" && (
-          <HelpOverlay onExit={() => setOverlayMode("none")} />
-        )}
+                setApprovalPolicy(newMode as ApprovalPolicy);
+                if (agentRef.current) {
+                  (
+                    agentRef.current as unknown as {
+                      approvalPolicy: ApprovalPolicy;
+                    }
+                  ).approvalPolicy = newMode as ApprovalPolicy;
+                }
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    id: `switch-approval-${Date.now()}`,
+                    type: "message",
+                    role: "system",
+                    content: [
+                      {
+                        type: "input_text",
+                        text: `Switched approval mode to ${newMode}`,
+                      },
+                    ],
+                  },
+                ]);
 
-        {overlayMode === "diff" && (
-          <DiffOverlay
-            diffText={diffText}
-            onExit={() => setOverlayMode("none")}
-          />
-        )}
+                setOverlayMode("none");
+              }}
+              onExit={() => setOverlayMode("none")}
+            />
+          )}
+
+          {overlayMode === "help" && (
+            <HelpOverlay onExit={() => setOverlayMode("none")} />
+          )}
+
+          {overlayMode === "diff" && (
+            <DiffOverlay
+              diffText={diffText}
+              onExit={() => setOverlayMode("none")}
+            />
+          )}
+        </Box>
       </Box>
-    </Box>
+    </ResponsiveLayout>
   );
 }

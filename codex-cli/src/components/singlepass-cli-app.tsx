@@ -3,8 +3,14 @@
 import type { AppConfig } from "../utils/config";
 import type { FileOperation } from "../utils/singlepass/file_ops";
 
-import Spinner from "./vendor/ink-spinner"; // Third‑party / vendor components
 import TextInput from "./vendor/ink-text-input";
+import {
+  EnhancedProgressBar,
+  ContextVisualizer,
+  SmartOutputViewer,
+  ErrorPanel,
+  type ErrorInfo,
+} from "./visual";
 import { createOpenAIClient } from "../utils/openai-client";
 import {
   generateDiffSummary,
@@ -83,23 +89,46 @@ function savePromptHistory(history: Array<string>) {
  * Small animated spinner shown while the request to OpenAI is in‑flight.
  */
 function WorkingSpinner({ text = "Working" }: { text?: string }) {
-  const [dots, setDots] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [subTasks, setSubTasks] = useState<
+    Array<{ name: string; status: "pending" | "running" | "done" }>
+  >([
+    { name: "Analyzing context", status: "pending" },
+    { name: "Generating response", status: "pending" },
+    { name: "Processing edits", status: "pending" },
+  ]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setDots((d) => (d.length < 3 ? d + "." : ""));
-    }, 400);
-    return () => clearInterval(interval);
+    const progressInterval = setInterval(() => {
+      setProgress((p) => Math.min(p + 0.1, 0.9));
+    }, 200);
+
+    const taskInterval = setInterval(() => {
+      setSubTasks((tasks) => {
+        const pendingIndex = tasks.findIndex((t) => t.status === "pending");
+        if (pendingIndex === -1) {
+          return tasks;
+        }
+
+        const newTasks = [...tasks];
+        if (pendingIndex > 0 && newTasks[pendingIndex - 1]) {
+          newTasks[pendingIndex - 1].status = "done";
+        }
+        if (newTasks[pendingIndex]) {
+          newTasks[pendingIndex].status = "running";
+        }
+        return newTasks;
+      });
+    }, 1000);
+
+    return () => {
+      clearInterval(progressInterval);
+      clearInterval(taskInterval);
+    };
   }, []);
 
   return (
-    <Box gap={2}>
-      <Spinner type="ball" />
-      <Text>
-        {text}
-        {dots}
-      </Text>
-    </Box>
+    <EnhancedProgressBar task={text} progress={progress} subTasks={subTasks} />
   );
 }
 
@@ -127,7 +156,7 @@ function DirectoryInfo({
   const totalChars = files.reduce((acc, fc) => acc + fc.content.length, 0);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" gap={1}>
       <Box
         flexDirection="column"
         borderStyle="round"
@@ -149,11 +178,17 @@ function DirectoryInfo({
           {((totalChars / contextLimit) * 100).toFixed(2)}% )
         </Text>
         {showStruct ? (
-          <Text>
-            <Text color="magentaBright">↳</Text>
-            <Text bold>Context structure:</Text>
-            <Text>{asciiStruct}</Text>
-          </Text>
+          <Box marginTop={1}>
+            <Text>
+              <Text color="magentaBright">↳</Text>
+              <Text bold>Context structure:</Text>
+            </Text>
+            <SmartOutputViewer
+              content={asciiStruct || ""}
+              maxInitialLines={15}
+              highlightErrors={false}
+            />
+          </Box>
         ) : (
           <Text>
             <Text color="magentaBright">↳</Text>{" "}
@@ -169,6 +204,8 @@ function DirectoryInfo({
           </Text>
         ) : null}
       </Box>
+
+      <ContextVisualizer used={totalChars} total={contextLimit} />
     </Box>
   );
 }
@@ -185,11 +222,20 @@ function SummaryAndDiffs({
       <Text color="yellow" bold>
         Summary:
       </Text>
-      <Text>{summary}</Text>
+      <SmartOutputViewer
+        content={summary}
+        maxInitialLines={5}
+        highlightErrors={false}
+      />
       <Text color="cyan" bold>
         Proposed Diffs:
       </Text>
-      <Text>{diffs}</Text>
+      <SmartOutputViewer
+        content={diffs}
+        maxInitialLines={20}
+        preservePatterns={[/^\+/, /^-/, /^@@/]}
+        highlightErrors={false}
+      />
     </Box>
   );
 }
@@ -361,6 +407,7 @@ export function SinglePassApp({
   const [showDirInfo, setShowDirInfo] = useState(false);
   const contextLimit = MAX_CONTEXT_CHARACTER_LIMIT;
   const inputPromptValueRef = useRef<string>("");
+  const [lastError, setLastError] = useState<ErrorInfo | null>(null);
 
   /* ---------------------------- Load file context --------------------------- */
   useEffect(() => {
@@ -383,6 +430,7 @@ export function SinglePassApp({
     setPrompt(userPrompt);
     setShowSpinner(true);
     setState("thinking");
+    setLastError(null);
 
     try {
       const taskContextStr = renderTaskContext({
@@ -436,6 +484,16 @@ export function SinglePassApp({
     } catch (err) {
       setShowSpinner(false);
       setState("error");
+
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorInfo: ErrorInfo = {
+        type: errorMessage.includes("ECONNREFUSED") ? "network" : "runtime",
+        message: errorMessage,
+        suggestion: errorMessage.includes("ECONNREFUSED")
+          ? "Check your internet connection and API key"
+          : "Try simplifying your request or breaking it into smaller tasks",
+      };
+      setLastError(errorInfo);
     }
   }
 
@@ -518,7 +576,7 @@ export function SinglePassApp({
   if (state === "error") {
     return (
       <Box flexDirection="column">
-        <Text color="red">Error calling OpenAI API.</Text>
+        {lastError && <ErrorPanel error={lastError} />}
         <ContinuePrompt
           onResult={(cont) => {
             if (!cont) {
@@ -559,7 +617,7 @@ export function SinglePassApp({
   }
 
   if (state === "thinking") {
-    return <WorkingSpinner />;
+    return <WorkingSpinner text="Processing request" />;
   }
 
   if (state === "interrupted") {

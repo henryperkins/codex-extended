@@ -24,7 +24,7 @@ Key Actions:
 • {"action":"summarize"} - Get overview of scratchpad contents
 
 ALWAYS use scratchpad when you discover something important or need to track state. Your future self will thank you!`,
-  strict: true,
+  strict: false,
   parameters: {
     type: "object",
     properties: {
@@ -65,6 +65,7 @@ ALWAYS use scratchpad when you discover something important or need to track sta
             description: "Search term to filter entries (for read action)",
           },
         },
+        required: [],
         additionalProperties: false,
         description: "Options for read action",
       },
