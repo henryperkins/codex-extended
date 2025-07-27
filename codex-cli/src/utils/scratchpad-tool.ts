@@ -1,21 +1,30 @@
 import type { Scratchpad } from "./scratchpad.js";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 
+import {
+  ToolValidationError,
+  getToolExample,
+} from "./tool-validation-error.js";
+
 /**
  * Create the scratchpad tool definition
  */
 export const scratchpadTool: FunctionTool = {
   type: "function",
   name: "scratchpad",
-  description: `Read and write to a persistent scratchpad for storing notes, plans, intermediate results, and state during task execution. Use this to remember important information across multiple steps.
-Examples:
-• Save note: {"action":"write","content":"Found bug in auth.js:42","category":"note"}
-• Save plan: {"action":"write","content":"1. Fix auth 2. Test 3. Deploy","category":"plan"}
-• Read all: {"action":"read"}
-• Read category: {"action":"read","options":{"category":"result"}}
-• Update: {"action":"update","id":"entry-id","content":"Updated info"}
-• Summarize: {"action":"summarize"}`,
-  strict: false,
+  description: `CRITICAL tool for maintaining context and tracking discoveries. USE FREQUENTLY during analysis and debugging!
+Purpose: Never lose important findings, track hypotheses, maintain state across operations.
+MANDATORY for: debugging sessions, multi-file analysis, error investigation, complex reasoning.
+
+Key Actions:
+• {"action":"write","content":"Important discovery or finding","category":"note"} - Save findings
+• {"action":"write","content":"Error details and stack trace","category":"error"} - Track errors
+• {"action":"write","content":"Strategy or approach","category":"plan"} - Document plans
+• {"action":"read"} - Review all saved information
+• {"action":"summarize"} - Get overview of scratchpad contents
+
+ALWAYS use scratchpad when you discover something important or need to track state. Your future self will thank you!`,
+  strict: true,
   parameters: {
     type: "object",
     properties: {
@@ -68,7 +77,7 @@ Examples:
 /**
  * Handle scratchpad tool calls
  */
-interface ScratchpadArgs {
+export interface ScratchpadArgs {
   action: "write" | "read" | "update" | "delete" | "clear" | "summarize";
   content?: string;
   category?: "note" | "plan" | "result" | "error" | "state";
@@ -80,18 +89,108 @@ interface ScratchpadArgs {
   };
 }
 
+/**
+ * Validate scratchpad arguments
+ */
+function validateScratchpadArgs(args: ScratchpadArgs): void {
+  const validActions = [
+    "write",
+    "read",
+    "update",
+    "delete",
+    "clear",
+    "summarize",
+  ];
+
+  if (!args.action) {
+    throw new ToolValidationError(
+      "Action is required",
+      "scratchpad",
+      undefined,
+      `Valid actions: ${validActions.join(", ")}`,
+    );
+  }
+
+  if (!validActions.includes(args.action)) {
+    throw new ToolValidationError(
+      `Invalid action: ${args.action}`,
+      "scratchpad",
+      args.action,
+      `Valid actions: ${validActions.join(", ")}`,
+    );
+  }
+
+  // Action-specific validation
+  if (args.action === "write" && !args.content?.trim()) {
+    throw new ToolValidationError(
+      "Content cannot be empty for write action",
+      "scratchpad",
+      "write",
+      getToolExample("scratchpad", "write"),
+    );
+  }
+
+  if (["update", "delete"].includes(args.action) && !args.id) {
+    throw new ToolValidationError(
+      `ID is required for ${args.action} action`,
+      "scratchpad",
+      args.action,
+      getToolExample("scratchpad", args.action),
+    );
+  }
+
+  if (args.action === "update" && !args.content?.trim()) {
+    throw new ToolValidationError(
+      "Content cannot be empty for update action",
+      "scratchpad",
+      "update",
+      getToolExample("scratchpad", "update"),
+    );
+  }
+
+  if (
+    args.category &&
+    !["note", "plan", "result", "error", "state"].includes(args.category)
+  ) {
+    throw new ToolValidationError(
+      `Invalid category: ${args.category}`,
+      "scratchpad",
+      args.action,
+      "Category must be one of: note, plan, result, error, state",
+    );
+  }
+
+  if (
+    args.options?.category &&
+    !["note", "plan", "result", "error", "state"].includes(
+      args.options.category,
+    )
+  ) {
+    throw new ToolValidationError(
+      `Invalid filter category: ${args.options.category}`,
+      "scratchpad",
+      args.action,
+      "Category must be one of: note, plan, result, error, state",
+    );
+  }
+}
+
 export async function handleScratchpadTool(
   args: ScratchpadArgs,
   scratchpad: Scratchpad,
 ): Promise<string> {
+  // Validate arguments first
+  validateScratchpadArgs(args);
+
   const { action, content, category, id, options } = args;
 
   switch (action) {
     case "write": {
-      if (!content) {
-        return "Error: content is required for write action";
-      }
-      const entryId = await scratchpad.write(content, category || "note");
+      // Validation already done in validateScratchpadArgs
+      const entryId = await scratchpad.write(
+        content as string,
+        category || "note",
+      );
       return `Saved to scratchpad with ID: ${entryId}`;
     }
 
@@ -112,18 +211,14 @@ export async function handleScratchpadTool(
     }
 
     case "update": {
-      if (!id || !content) {
-        return "Error: id and content are required for update action";
-      }
-      const success = await scratchpad.update(id, content);
+      // Validation already done in validateScratchpadArgs
+      const success = await scratchpad.update(id as string, content as string);
       return success ? `Updated entry ${id}` : `Entry ${id} not found`;
     }
 
     case "delete": {
-      if (!id) {
-        return "Error: id is required for delete action";
-      }
-      const success = await scratchpad.delete(id);
+      // Validation already done in validateScratchpadArgs
+      const success = await scratchpad.delete(id as string);
       return success ? `Deleted entry ${id}` : `Entry ${id} not found`;
     }
 

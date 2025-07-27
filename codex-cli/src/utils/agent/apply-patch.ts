@@ -745,7 +745,12 @@ function remove_file(p: string): void {
 // -----------------------------------------------------------------------------
 
 // Only run if this file is executed directly AND not as part of the main CLI bundle
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}` && !process.argv[1].includes('/cli.js') && !process.argv[1].includes('/cli-dev.js')) {
+if (
+  process.argv[1] &&
+  import.meta.url === `file://${process.argv[1]}` &&
+  !process.argv[1].includes("/cli.js") &&
+  !process.argv[1].includes("/cli-dev.js")
+) {
   let patchText = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => (patchText += chunk));

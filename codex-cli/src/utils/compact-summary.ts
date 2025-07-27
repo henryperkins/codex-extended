@@ -63,7 +63,7 @@ export async function generateCompactSummary(
       },
       {
         role: "user",
-        content: customInstructions 
+        content: customInstructions
           ? `Here is the conversation so far:\n${conversationText}\n\n${customInstructions}`
           : `Here is the conversation so far:\n${conversationText}\n\nPlease summarize this conversation, covering:\n1. Tasks performed and outcomes\n2. Code files, modules, or functions modified or examined\n3. Important decisions or assumptions made\n4. Errors encountered and test or build results\n5. Remaining tasks, open questions, or next steps\nProvide the summary in a clear, concise format.`,
       },

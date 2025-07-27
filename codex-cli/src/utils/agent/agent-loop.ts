@@ -25,7 +25,11 @@ import {
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
-import { scratchpadTool, handleScratchpadTool } from "../scratchpad-tool.js";
+import {
+  scratchpadTool,
+  handleScratchpadTool,
+  type ScratchpadArgs,
+} from "../scratchpad-tool.js";
 import { Scratchpad } from "../scratchpad.js";
 import {
   ORIGIN,
@@ -44,6 +48,7 @@ import {
   type TodoListArgs,
 } from "../todo-list-tool.js";
 import { TodoList } from "../todo-list.js";
+import { ToolEnforcementState } from "../tool-enforcement-state.js";
 import {
   ToolExecutionError,
   ERROR_CODES,
@@ -51,8 +56,16 @@ import {
   getExpectedFormat,
   getToolExample,
 } from "../tool-errors.js";
-import { selectToolsForQuery } from "../tool-selection.js";
-import { toolsInfoTool, handleToolsInfo } from "../tools-info-tool.js";
+import { selectToolsForQuery, getRequiredTools } from "../tool-selection.js";
+import {
+  ToolValidationError,
+  getToolExample as getToolValidationExample,
+} from "../tool-validation-error.js";
+import {
+  toolsInfoTool,
+  handleToolsInfo,
+  type ToolsInfoArgs,
+} from "../tools-info-tool.js";
 import { applyPatchToolInstructions } from "./apply-patch.js";
 import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -260,6 +273,9 @@ export class AgentLoop {
   /** TodoList for task tracking during agent execution */
   private todoList: TodoList;
 
+  /** Tool enforcement state for tracking required tool usage */
+  private toolEnforcementState: ToolEnforcementState;
+
   /**
    * Abort the ongoing request/stream, if any. This allows callers (typically
    * the UI layer) to interrupt the current agent step so the user can issue
@@ -380,6 +396,173 @@ export class AgentLoop {
    * happy under `noUnusedLocals`.  Restore when telemetry support lands.
    */
   // private cumulativeThinkingMs = 0;
+
+  /**
+   * Detect if a task is complex and needs organizational tools
+   */
+  private analyzeTaskComplexity(input: Array<ResponseInputItem>): {
+    complexity: number;
+    suggestTodo: boolean;
+    suggestScratchpad: boolean;
+    reason: string;
+  } {
+    let userMessage = "";
+
+    // Extract user message content
+    for (const item of input) {
+      if (item.type === "message" && item.role === "user") {
+        const content = item.content;
+        if (Array.isArray(content)) {
+          for (const c of content) {
+            if (c.type === "input_text") {
+              userMessage += c.text + " ";
+            }
+          }
+        }
+      }
+    }
+
+    let complexityScore = 0;
+    const reasons: Array<string> = [];
+
+    // Check message length
+    const wordCount = userMessage.split(/\s+/).length;
+    if (wordCount > 30) {
+      complexityScore += 3;
+      reasons.push("long request");
+    } else if (wordCount > 15) {
+      complexityScore += 2;
+    }
+
+    // Check for multiple files/components mentioned
+    const fileMatches = userMessage.match(
+      /\.(ts|js|py|java|cpp|go|rs|rb|php)\b/gi,
+    );
+    if (fileMatches && fileMatches.length > 1) {
+      complexityScore += 3;
+      reasons.push("multiple files");
+    }
+
+    // Check for task keywords
+    const taskKeywords =
+      /implement|create|build|fix|refactor|analyze|debug|design|update|migrate|develop/gi;
+    const keywordMatches = userMessage.match(taskKeywords);
+    if (keywordMatches && keywordMatches.length > 0) {
+      complexityScore += 2 * keywordMatches.length;
+      reasons.push("implementation task");
+    }
+
+    // Check for numbered steps or lists
+    if (/\d+\.|•|-\s|\*\s|first.*then|step\s+\d+/i.test(userMessage)) {
+      complexityScore += 3;
+      reasons.push("multiple steps");
+    }
+
+    // Check for debugging/error patterns
+    if (
+      /error|bug|issue|crash|fail|broken|not work|debug|investigate/i.test(
+        userMessage,
+      )
+    ) {
+      complexityScore += 2;
+      reasons.push("debugging required");
+    }
+
+    // Determine tool suggestions
+    const suggestTodo =
+      complexityScore >= 4 ||
+      reasons.includes("multiple steps") ||
+      reasons.includes("implementation task");
+    const suggestScratchpad =
+      complexityScore >= 3 ||
+      reasons.includes("debugging required") ||
+      reasons.includes("multiple files");
+
+    return {
+      complexity: complexityScore,
+      suggestTodo,
+      suggestScratchpad,
+      reason: reasons.join(", "),
+    };
+  }
+
+  /**
+   * Inject tool state context to encourage proper tool usage
+   */
+  private async getToolStateContext(): Promise<Array<ResponseInputItem>> {
+    const contextItems: Array<ResponseInputItem> = [];
+
+    try {
+      // Check todo list state
+      const todos = this.todoList.getAll();
+      const pendingTodos = todos.filter(
+        (t) => t.status === "pending" || t.status === "in_progress",
+      );
+
+      if (todos.length === 0) {
+        // No todos exist - remind to create them
+        contextItems.push({
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "📋 Reminder: Todo list is empty. For any multi-step task, start by using the todo_list tool to create and organize your tasks.",
+            },
+          ],
+        });
+      } else if (pendingTodos.length > 0) {
+        // Show existing todos
+        const inProgress = todos.filter((t) => t.status === "in_progress");
+        const pending = todos.filter((t) => t.status === "pending");
+
+        let todoContext = "📋 Current todo status:\n";
+        if (inProgress.length > 0 && inProgress[0]) {
+          todoContext += `In Progress (${inProgress.length}): ${inProgress[0].content}${inProgress.length > 1 ? " (+more)" : ""}\n`;
+        }
+        if (pending.length > 0) {
+          todoContext += `Pending (${pending.length}): Use todo_list 'next' action to see actionable tasks\n`;
+        }
+        todoContext += "Remember to update task status as you work!";
+
+        contextItems.push({
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: todoContext,
+            },
+          ],
+        });
+      }
+
+      // Check scratchpad state
+      const scratchpadSummary = this.scratchpad.summarize();
+      if (scratchpadSummary && scratchpadSummary !== "Empty scratchpad") {
+        // Scratchpad has content
+        const recentEntries = this.scratchpad.read({ limit: 2 });
+        if (recentEntries.length > 0) {
+          contextItems.push({
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: `📝 Scratchpad contains ${this.scratchpad.read({}).length} entries. Recent: "${recentEntries[0]?.content.substring(0, 50) || "N/A"}...". Use scratchpad 'read' to review all saved context.`,
+              },
+            ],
+          });
+        }
+      }
+    } catch (error) {
+      // Don't let context injection errors break the flow
+      log(`Tool state context injection error: ${error}`);
+    }
+
+    return contextItems;
+  }
+
   constructor({
     model,
     provider = "openai",
@@ -438,6 +621,13 @@ export class AgentLoop {
       filePath: join(todoSaveDir, `codex-todo-${this.sessionId}.json`),
       autoSave: true,
     });
+
+    // Initialize tool enforcement state
+    this.toolEnforcementState = new ToolEnforcementState(
+      "Current task",
+      true, // Enable enforcement by default
+    );
+
     // Configure OpenAI client with optional timeout (ms) from environment
     const timeoutMs = OPENAI_TIMEOUT_MS;
     const apiKey = getApiKey(this.provider) ?? "";
@@ -523,6 +713,19 @@ export class AgentLoop {
 
       return [abortedOutput];
     }
+
+    // Implement tool output limits to prevent excessive token usage
+    const MAX_OUTPUT_LENGTH = 10000; // 10KB limit
+    const TRUNCATION_MESSAGE =
+      "\n\n[Output truncated from {originalLength} to {maxLength} characters]";
+
+    // Tool-specific output limits
+    const TOOL_OUTPUT_LIMITS: Record<string, number> = {
+      "shell": 10000,
+      "fetch_url": 20000,
+      "web_search": 15000,
+      "container.exec": 10000,
+    };
     // ---------------------------------------------------------------------
     // Normalise the function‑call item into a consistent shape regardless of
     // whether it originated from the `/responses` or the `/chat/completions`
@@ -618,6 +821,25 @@ export class AgentLoop {
       output: "no function found",
     };
 
+    // Helper function to truncate output if needed
+    const truncateOutput = (text: string, maxLength: number): string => {
+      if (text.length <= maxLength) {
+        return text;
+      }
+      return (
+        text.substring(0, maxLength) +
+        TRUNCATION_MESSAGE.replace(
+          "{originalLength}",
+          text.length.toString(),
+        ).replace("{maxLength}", maxLength.toString())
+      );
+    };
+
+    // Get appropriate limit for the current tool
+    const getOutputLimit = (toolName: string): number => {
+      return TOOL_OUTPUT_LIMITS[toolName] || MAX_OUTPUT_LENGTH;
+    };
+
     // We intentionally *do not* remove this `callId` from the `pendingAborts`
     // set right away.  The output produced below is only queued up for the
     // *next* request to the OpenAI API – it has not been delivered yet.  If
@@ -635,16 +857,54 @@ export class AgentLoop {
     // TODO: allow arbitrary function calls (beyond shell/container.exec)
     if (name === "scratchpad") {
       try {
-        const result = await handleScratchpadTool(args, this.scratchpad);
+        const result = await handleScratchpadTool(
+          args as ScratchpadArgs,
+          this.scratchpad,
+        );
         outputItem.output = JSON.stringify({
           output: result,
           metadata: { tool: "scratchpad" },
         });
+        // Record successful tool use
+        this.toolEnforcementState.recordToolUse(
+          "scratchpad",
+          (args as ScratchpadArgs).action,
+          true,
+        );
       } catch (error) {
-        outputItem.output = JSON.stringify({
-          output: `Scratchpad error: ${error}`,
-          metadata: { error: true },
-        });
+        if (error instanceof ToolValidationError) {
+          // Handle validation errors with retry guidance
+          outputItem.output = JSON.stringify({
+            error: error.message,
+            retry_required: true,
+            correct_usage:
+              error.suggestedFix ||
+              getToolValidationExample(error.toolName, error.action),
+            metadata: { error: true, validation_error: true },
+          });
+          // Force re-prompting
+          additionalItems.push({
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: `⚠️ Tool validation error. Please retry with correct format: ${error.suggestedFix || getToolValidationExample(error.toolName, error.action)}`,
+              },
+            ],
+          });
+        } else {
+          outputItem.output = JSON.stringify({
+            output: `Scratchpad error: ${error}`,
+            metadata: { error: true },
+          });
+        }
+        // Record failed tool use
+        this.toolEnforcementState.recordToolUse(
+          "scratchpad",
+          (args as ScratchpadArgs)?.action,
+          false,
+        );
       }
     } else if (name === "todo_list") {
       try {
@@ -656,15 +916,50 @@ export class AgentLoop {
           output: result,
           metadata: { tool: "todo_list" },
         });
+        // Record successful tool use
+        this.toolEnforcementState.recordToolUse(
+          "todo_list",
+          (args as TodoListArgs).action,
+          true,
+        );
       } catch (error) {
-        outputItem.output = JSON.stringify({
-          output: `Todo list error: ${error}`,
-          metadata: { error: true },
-        });
+        if (error instanceof ToolValidationError) {
+          // Handle validation errors with retry guidance
+          outputItem.output = JSON.stringify({
+            error: error.message,
+            retry_required: true,
+            correct_usage:
+              error.suggestedFix ||
+              getToolValidationExample(error.toolName, error.action),
+            metadata: { error: true, validation_error: true },
+          });
+          // Force re-prompting
+          additionalItems.push({
+            type: "message",
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: `⚠️ Tool validation error. Please retry with correct format: ${error.suggestedFix || getToolValidationExample(error.toolName, error.action)}`,
+              },
+            ],
+          });
+        } else {
+          outputItem.output = JSON.stringify({
+            output: `Todo list error: ${error}`,
+            metadata: { error: true },
+          });
+        }
+        // Record failed tool use
+        this.toolEnforcementState.recordToolUse(
+          "todo_list",
+          (args as TodoListArgs)?.action,
+          false,
+        );
       }
     } else if (name === "tools_info") {
       try {
-        const result = await handleToolsInfo(args);
+        const result = await handleToolsInfo(args as ToolsInfoArgs);
         outputItem.output = JSON.stringify({
           output: result,
           metadata: { tool: "tools_info" },
@@ -688,7 +983,17 @@ export class AgentLoop {
         this.getCommandConfirmation,
         this.execAbortController?.signal,
       );
-      outputItem.output = JSON.stringify({ output: outputText, metadata });
+      // Apply output truncation with tool-specific limits to prevent excessive token usage
+      const toolLimit = getOutputLimit(name || "shell");
+      const truncatedOutput = truncateOutput(outputText, toolLimit);
+      outputItem.output = JSON.stringify({ output: truncatedOutput, metadata });
+
+      // Add metadata about truncation for monitoring purposes
+      if (outputText.length > toolLimit) {
+        log(
+          `Truncated output for tool ${name} from ${outputText.length} to ${toolLimit} characters`,
+        );
+      }
 
       if (additionalItemsFromExec) {
         additionalItems.push(...additionalItemsFromExec);
@@ -719,7 +1024,17 @@ export class AgentLoop {
           if (result.metadata.content_type === "extracted") {
             formattedOutput += `[Content intelligently extracted from ${result.metadata.original_size} bytes to ${result.metadata.processed_size} bytes]\n\n`;
           }
-          formattedOutput += result.raw || "No content available";
+          // Apply output truncation with tool-specific limits to prevent excessive token usage
+          const toolLimit = getOutputLimit("fetch_url");
+          const truncatedRaw = truncateOutput(result.raw || "", toolLimit);
+          formattedOutput += truncatedRaw;
+
+          // Add metadata about truncation for monitoring purposes
+          if (result.raw && result.raw.length > toolLimit) {
+            log(
+              `Truncated fetch_url output from ${result.raw.length} to ${toolLimit} characters`,
+            );
+          }
 
           outputItem.output = JSON.stringify({
             output: formattedOutput,
@@ -940,6 +1255,46 @@ export class AgentLoop {
       // messages) on every call.
 
       let turnInput: Array<ResponseInputItem> = [];
+
+      // Inject tool state context at the beginning of the conversation
+      if (!previousResponseId || previousResponseId === "") {
+        const toolContext = await this.getToolStateContext();
+        if (toolContext.length > 0) {
+          // Add context before user input to encourage tool usage
+          turnInput.push(...toolContext);
+        }
+
+        // Analyze task complexity and suggest tools if needed
+        const complexity = this.analyzeTaskComplexity(input);
+        if (complexity.suggestTodo || complexity.suggestScratchpad) {
+          const suggestions: Array<string> = [];
+
+          if (complexity.suggestTodo && this.todoList.getAll().length === 0) {
+            suggestions.push(
+              "📋 This appears to be a complex task. Start by creating a todo list to organize your approach.",
+            );
+          }
+
+          if (complexity.suggestScratchpad) {
+            suggestions.push(
+              "📝 Use the scratchpad tool to track findings and maintain context as you work.",
+            );
+          }
+
+          if (suggestions.length > 0) {
+            turnInput.push({
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Task analysis (${complexity.reason}):\n${suggestions.join("\n")}`,
+                },
+              ],
+            });
+          }
+        }
+      }
       // Keeps track of how many items in `turnInput` stem from the existing
       // transcript so we can avoid re‑emitting them to the UI. Only used when
       // `disableResponseStorage === true`.
@@ -1002,8 +1357,8 @@ export class AgentLoop {
         toolMap.set("fetch_url", azureFetchTool);
         toolMap.set("web_search", azureSearchTool);
 
-        // Select relevant tools based on query (increased to 3 tools max)
-        const selectedTools = selectToolsForQuery(userQuery.trim(), 3, 3);
+        // Select relevant tools based on query (increased to 5 tools max to ensure organizational tools are included)
+        const selectedTools = selectToolsForQuery(userQuery.trim(), 5, 2);
         const selectedNames = new Set(
           selectedTools.map((t) => (t as FunctionTool).name),
         );
@@ -1029,6 +1384,62 @@ export class AgentLoop {
         log(
           `Selected tools: ${tools.map((t) => (t as FunctionTool).name || t.type).join(", ")}`,
         );
+
+        // Analyze query and set up tool enforcement
+        const { required, recommended, complexity } = getRequiredTools(
+          userQuery.trim(),
+        );
+
+        // Reset enforcement state for new task
+        this.toolEnforcementState.reset(userQuery.trim().substring(0, 100));
+
+        // Log complexity analysis
+        log(
+          `Task complexity score: ${complexity.score}, patterns: ${complexity.patterns.join(", ")}`,
+        );
+
+        // Set required tools
+        if (required.length > 0) {
+          this.toolEnforcementState.requireTools(required);
+          log(`Required tools for this task: ${required.join(", ")}`);
+
+          // Ensure required tools are included in the tool list
+          for (const reqTool of required) {
+            if (!selectedNames.has(reqTool) && toolMap.has(reqTool)) {
+              tools.push(toolMap.get(reqTool)!);
+              selectedNames.add(reqTool);
+            }
+          }
+        }
+
+        // Set recommended tools
+        if (recommended.length > 0) {
+          recommended.forEach((tool) =>
+            this.toolEnforcementState.recommendTool(tool),
+          );
+          log(`Recommended tools: ${recommended.join(", ")}`);
+        }
+
+        // If we detected required tools but they haven't been used yet, inject a reminder
+        if (
+          required.length > 0 &&
+          (!previousResponseId || previousResponseId === "")
+        ) {
+          const missingToolsMsg =
+            this.toolEnforcementState.getMissingToolsMessage();
+          if (missingToolsMsg) {
+            turnInput.push({
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: missingToolsMsg,
+                },
+              ],
+            });
+          }
+        }
       } else {
         // No user query, use all tools
         if (this.model.startsWith("codex")) {
@@ -1570,6 +1981,35 @@ export class AgentLoop {
             // current turn inputs available for retries.
             turnInput = newTurnInput;
 
+            // Validate tool usage requirements after processing the response
+            const validation = this.toolEnforcementState.validateProgress();
+            if (!validation.valid && validation.missing.length > 0) {
+              log(
+                `Tool enforcement: Missing required tools: ${validation.missing.join(", ")}`,
+              );
+
+              // Inject enforcement message to prompt the model to use required tools
+              const enforcementMsg =
+                this.toolEnforcementState.getMissingToolsMessage();
+              if (enforcementMsg) {
+                // Add enforcement message to the turn input for the next iteration
+                turnInput.push({
+                  type: "message",
+                  role: "system",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: enforcementMsg,
+                    },
+                  ],
+                });
+
+                // Continue the loop to force tool usage
+                log("Continuing conversation to enforce tool usage...");
+                continue; // Don't break, continue the main while loop
+              }
+            }
+
             // Stream finished successfully – leave the retry loop.
             break;
           } catch (err: unknown) {
@@ -2069,6 +2509,60 @@ You can:
 - More details on your functionality are available at \`codex --help\`
 
 The Codex CLI is open-sourced. Don't confuse yourself with the old Codex language model built by OpenAI many moons ago (this is understandably top of mind for you!). Within this context, Codex refers to the open-source agentic coding interface.
+
+MANDATORY WORKFLOW TOOLS:
+1. Todo List (todo_list) - REQUIRED for multi-step tasks:
+   - ALWAYS create a todo list FIRST when given any task with multiple steps
+   - Break down complex requests into clear, actionable subtasks
+   - Mark items as 'in_progress' when starting, 'completed' when done
+   - Use 'next' action to identify what to work on
+   - This ensures nothing is missed and provides clear progress tracking
+
+2. Scratchpad (scratchpad) - REQUIRED for analysis and state tracking:
+   - Save important findings, errors, and intermediate results immediately
+   - Track your reasoning, hypotheses, and discoveries
+   - Store code snippets, file paths, and command outputs for reference
+   - Use categories: 'note' for findings, 'error' for issues, 'plan' for strategies
+   - This maintains context and helps with complex debugging
+
+3. When these tools are MANDATORY:
+   - Todo: Any task with words like "implement", "create", "fix", "build", "refactor", "analyze"
+   - Todo: Whenever the user lists multiple requirements or steps
+   - Scratchpad: During debugging sessions or when investigating errors
+   - Scratchpad: When analyzing multiple files or tracking state across operations
+   - Both: Any task that will require more than 2-3 tool calls
+
+Using these organizational tools demonstrates professionalism and ensures reliable, complete solutions.
+
+EXAMPLE TOOL USAGE PATTERNS:
+
+Feature Implementation:
+1. Start: {"tool":"todo_list","action":"add","content":"Research existing authentication system","priority":"high"}
+2. Plan: {"tool":"todo_list","action":"add","content":"Implement JWT token generation","priority":"high"}
+3. Track: {"tool":"scratchpad","action":"write","content":"Found auth middleware in src/middleware/auth.ts","category":"note"}
+4. Progress: {"tool":"todo_list","action":"start","id":"task-123"}
+5. Save findings: {"tool":"scratchpad","action":"write","content":"JWT secret stored in process.env.JWT_SECRET","category":"note"}
+
+IMPORTANT DISTINCTION:
+- Todo and scratchpad are TOOLS (function calls), NOT shell commands
+- Use them through the tool interface: {"action":"complete","id":"task-id"}
+- NEVER try "$ todo_list" or "$ scratchpad" in the shell - these are not CLI commands
+
+Debugging Session:
+1. Record: {"tool":"scratchpad","action":"write","content":"Error: Cannot read property 'id' of undefined at line 42","category":"error"}
+2. Hypothesis: {"tool":"scratchpad","action":"write","content":"Possible cause: async operation not awaited","category":"plan"}
+3. Track fix: {"tool":"todo_list","action":"add","content":"Add await to database query in getUser()","priority":"high"}
+
+Multi-file Refactoring:
+1. Plan: {"tool":"todo_list","action":"add","content":"Identify all files using old API format","priority":"high"}
+2. Document: {"tool":"scratchpad","action":"write","content":"Files to update: api/users.ts, api/posts.ts, api/comments.ts","category":"plan"}
+3. Track each: {"tool":"todo_list","action":"add","content":"Update api/users.ts to new format","parentId":"parent-task-id"}
+
+ERROR RECOVERY:
+If you see "bash: todo_list: command not found" or similar errors:
+- This means you tried to use a TOOL as a shell command
+- Stop and use the proper tool interface instead
+- Example: To complete a task, use the todo_list tool with {"action":"complete","id":"task-id","notes":"your notes"}
 
 You are an agent - please keep going until the user's query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved. If you are not sure about file content or codebase structure pertaining to the user's request, use your tools to read files and gather the relevant information: do NOT guess or make up an answer.
 

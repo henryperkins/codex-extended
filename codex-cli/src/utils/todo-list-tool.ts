@@ -1,62 +1,87 @@
 import type { TodoList } from "./todo-list.js";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 
+import {
+  ToolValidationError,
+  getToolExample,
+} from "./tool-validation-error.js";
+
 /**
  * Create the todo list tool definition
  */
 export const todoListTool: FunctionTool = {
   type: "function",
   name: "todo_list",
-  description: `Manage a structured TODO list to track tasks, subtasks, and dependencies during complex multi-step operations. Helps maintain focus and ensure all steps are completed.
-Examples:
-• Add task: {"action":"add","content":"Implement feature X","priority":"high"}
-• List tasks: {"action":"list"} or {"action":"list","status":"pending"}
-• Start task: {"action":"start","id":"task-id"}
-• Complete: {"action":"complete","id":"task-id","notes":"Fixed by..."}
-• Next tasks: {"action":"next"}`,
-  strict: false,
+  description: `ESSENTIAL tool for professional task management. USE IMMEDIATELY when starting any multi-step task!
+Purpose: Ensure nothing is missed, track progress systematically, manage dependencies.
+MANDATORY for: implementations, bug fixes, features, refactoring, multi-file changes, analysis tasks.
+
+Key Actions:
+• {"action":"add","content":"Clear task description","priority":"high"} - Add new task
+• {"action":"list"} - View all tasks with status
+• {"action":"next"} - Get actionable tasks to work on
+• {"action":"start","id":"task-id"} - Mark task as in progress
+• {"action":"complete","id":"task-id","notes":"Implementation details"} - Complete task
+
+ALWAYS start complex tasks by creating a todo list. Professional developers plan before coding!
+
+REMINDER: This is a TOOL, not a shell command. Use through function calls, NOT as '$ todo_list' in bash!`,
+  strict: true,
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["add", "update", "list", "summary", "next", "complete", "block", "start", "add_dependency", "clear_completed"],
-        description: "The action to perform on the todo list"
+        enum: [
+          "add",
+          "update",
+          "list",
+          "summary",
+          "next",
+          "complete",
+          "block",
+          "start",
+          "add_dependency",
+          "clear_completed",
+        ],
+        description: "The action to perform on the todo list",
       },
       content: {
         type: "string",
-        description: "Task description (required for add action)"
+        description: "Task description (required for add action)",
       },
       id: {
         type: "string",
-        description: "Task ID (required for update/complete/block/start/add_dependency)"
+        description:
+          "Task ID (required for update/complete/block/start/add_dependency)",
       },
       priority: {
         type: "string",
         enum: ["low", "medium", "high", "critical"],
-        description: "Task priority (default: medium)"
+        description: "Task priority (default: medium)",
       },
       parentId: {
         type: "string",
-        description: "Parent task ID for creating subtasks"
+        description: "Parent task ID for creating subtasks",
       },
       dependsOnId: {
         type: "string",
-        description: "ID of task that must be completed first (for add_dependency)"
+        description:
+          "ID of task that must be completed first (for add_dependency)",
       },
       status: {
         type: "string",
         enum: ["pending", "in_progress", "completed", "blocked"],
-        description: "Filter by status (for list action)"
+        description: "Filter by status (for list action)",
       },
       notes: {
         type: "string",
-        description: "Additional notes when updating task status"
-      }
+        description: "Additional notes when updating task status",
+      },
     },
     required: ["action"],
-    additionalProperties: false
-  }
+    additionalProperties: false,
+  },
 };
 
 /**
@@ -73,19 +98,133 @@ export interface TodoListArgs {
   notes?: string;
 }
 
+/**
+ * Validate todo list arguments
+ */
+function validateTodoArgs(args: TodoListArgs): void {
+  const validActions = [
+    "add",
+    "update",
+    "list",
+    "summary",
+    "next",
+    "complete",
+    "block",
+    "start",
+    "add_dependency",
+    "clear_completed",
+  ];
+
+  if (!args.action) {
+    throw new ToolValidationError(
+      "Action is required",
+      "todo_list",
+      undefined,
+      `Valid actions: ${validActions.join(", ")}`,
+    );
+  }
+
+  if (!validActions.includes(args.action)) {
+    throw new ToolValidationError(
+      `Invalid action: ${args.action}`,
+      "todo_list",
+      args.action,
+      `Valid actions: ${validActions.join(", ")}`,
+    );
+  }
+
+  // Action-specific validation
+  if (args.action === "add" && !args.content?.trim()) {
+    throw new ToolValidationError(
+      "Content cannot be empty for add action",
+      "todo_list",
+      "add",
+      getToolExample("todo_list", "add"),
+    );
+  }
+
+  if (
+    ["update", "complete", "block", "start"].includes(args.action) &&
+    !args.id
+  ) {
+    throw new ToolValidationError(
+      `ID is required for ${args.action} action`,
+      "todo_list",
+      args.action,
+      getToolExample("todo_list", args.action),
+    );
+  }
+
+  if (args.action === "update" && !args.status) {
+    throw new ToolValidationError(
+      "Status is required for update action",
+      "todo_list",
+      "update",
+      "Status must be one of: pending, in_progress, completed, blocked",
+    );
+  }
+
+  if (args.action === "add_dependency" && (!args.id || !args.dependsOnId)) {
+    throw new ToolValidationError(
+      "Both id and dependsOnId are required for add_dependency action",
+      "todo_list",
+      "add_dependency",
+      getToolExample("todo_list", "add_dependency"),
+    );
+  }
+
+  if (
+    args.priority &&
+    !["low", "medium", "high", "critical"].includes(args.priority)
+  ) {
+    throw new ToolValidationError(
+      `Invalid priority: ${args.priority}`,
+      "todo_list",
+      args.action,
+      "Priority must be one of: low, medium, high, critical",
+    );
+  }
+
+  if (
+    args.status &&
+    !["pending", "in_progress", "completed", "blocked"].includes(args.status)
+  ) {
+    throw new ToolValidationError(
+      `Invalid status: ${args.status}`,
+      "todo_list",
+      args.action,
+      "Status must be one of: pending, in_progress, completed, blocked",
+    );
+  }
+}
+
 export async function handleTodoListTool(
   args: TodoListArgs,
-  todoList: TodoList
+  todoList: TodoList,
 ): Promise<string> {
-  const { action, content, id, priority, parentId, dependsOnId, status, notes } = args;
+  // Validate arguments first
+  validateTodoArgs(args);
+
+  const {
+    action,
+    content,
+    id,
+    priority,
+    parentId,
+    dependsOnId,
+    status,
+    notes,
+  } = args;
 
   switch (action) {
     case "add": {
-      if (!content) {
-        return "Error: content is required for add action";
-      }
+      // Validation already done in validateTodoArgs
       try {
-        const taskId = await todoList.add(content, priority || "medium", parentId);
+        const taskId = await todoList.add(
+          content as string,
+          priority || "medium",
+          parentId,
+        );
         const progress = todoList.getProgress();
         return `✅ Added task: ${taskId}\n${content}\nTotal tasks: ${progress.total} (${progress.pending} pending)`;
       } catch (error) {
@@ -94,15 +233,17 @@ export async function handleTodoListTool(
     }
 
     case "update": {
-      if (!id || !status) {
-        return "Error: id and status are required for update action";
-      }
+      // Validation already done in validateTodoArgs
       try {
-        const success = await todoList.updateStatus(id, status, notes);
+        const success = await todoList.updateStatus(
+          id as string,
+          status as "pending" | "in_progress" | "completed" | "blocked",
+          notes,
+        );
         if (!success) {
           return `Task ${id} not found`;
         }
-        const task = todoList.get(id);
+        const task = todoList.get(id as string);
         return `Updated task ${id} to ${status}: ${task?.content}`;
       } catch (error) {
         return `Error updating task: ${error instanceof Error ? error.message : String(error)}`;
@@ -110,15 +251,17 @@ export async function handleTodoListTool(
     }
 
     case "complete": {
-      if (!id) {
-        return "Error: id is required for complete action";
-      }
+      // Validation already done in validateTodoArgs
       try {
-        const success = await todoList.updateStatus(id, "completed", notes);
+        const success = await todoList.updateStatus(
+          id as string,
+          "completed",
+          notes,
+        );
         if (!success) {
           return `Task ${id} not found`;
         }
-        const task = todoList.get(id);
+        const task = todoList.get(id as string);
         const progress = todoList.getProgress();
         return `✅ Completed: ${task?.content}\nProgress: ${progress.completed}/${progress.total} (${progress.completionRate.toFixed(1)}%)`;
       } catch (error) {
@@ -127,15 +270,17 @@ export async function handleTodoListTool(
     }
 
     case "start": {
-      if (!id) {
-        return "Error: id is required for start action";
-      }
+      // Validation already done in validateTodoArgs
       try {
-        const success = await todoList.updateStatus(id, "in_progress", notes);
+        const success = await todoList.updateStatus(
+          id as string,
+          "in_progress",
+          notes,
+        );
         if (!success) {
           return `Task ${id} not found`;
         }
-        const task = todoList.get(id);
+        const task = todoList.get(id as string);
         return `🔄 Started: ${task?.content}`;
       } catch (error) {
         return `Error starting task: ${error instanceof Error ? error.message : String(error)}`;
@@ -143,10 +288,12 @@ export async function handleTodoListTool(
     }
 
     case "block": {
-      if (!id) {
-        return "Error: id is required for block action";
-      }
-      const success = await todoList.updateStatus(id, "blocked", notes);
+      // Validation already done in validateTodoArgs
+      const success = await todoList.updateStatus(
+        id as string,
+        "blocked",
+        notes,
+      );
       if (!success) {
         return `Task ${id} not found`;
       }
@@ -164,7 +311,7 @@ export async function handleTodoListTool(
         dependencies?: Array<string>;
         notes?: string;
       }> = [];
-      
+
       if (status) {
         tasks = todoList.getByStatus(status);
       } else {
@@ -172,40 +319,45 @@ export async function handleTodoListTool(
       }
 
       if (tasks.length === 0) {
-        return status ? `No tasks with status: ${status}` : "No tasks in the list";
+        return status
+          ? `No tasks with status: ${status}`
+          : "No tasks in the list";
       }
 
-      const formatTask = (task: {
-        id: string;
-        content: string;
-        status: string;
-        priority: string;
-        dependencies?: Array<string>;
-        notes?: string;
-      }, indent = "") => {
+      const formatTask = (
+        task: {
+          id: string;
+          content: string;
+          status: string;
+          priority: string;
+          dependencies?: Array<string>;
+          notes?: string;
+        },
+        indent = "",
+      ) => {
         const statusEmoji = {
           pending: "⏳",
           in_progress: "🔄",
           completed: "✅",
-          blocked: "🚫"
+          blocked: "🚫",
         }[task.status];
 
         const priorityEmoji = {
           critical: "🔴",
           high: "🟠",
           medium: "🟡",
-          low: "🟢"
+          low: "🟢",
         }[task.priority];
 
         let line = `${indent}${statusEmoji} ${priorityEmoji} [${task.id.slice(0, 8)}] ${task.content}`;
-        
+
         if (task.dependencies && task.dependencies.length > 0) {
           const blockers = todoList.getBlockingDependencies(task.id);
           if (blockers.length > 0) {
-            line += ` (blocked by: ${blockers.map(b => b.content).join(", ")})`;
+            line += ` (blocked by: ${blockers.map((b) => b.content).join(", ")})`;
           }
         }
-        
+
         if (task.notes) {
           line += `\n${indent}   📝 ${task.notes.replace(/\n/g, `\n${indent}   `)}`;
         }
@@ -214,14 +366,14 @@ export async function handleTodoListTool(
       };
 
       // Group by parent
-      const rootTasks = tasks.filter(t => !t.parentId);
-      const subtasks = tasks.filter(t => t.parentId);
+      const rootTasks = tasks.filter((t) => !t.parentId);
+      const subtasks = tasks.filter((t) => t.parentId);
 
       let output = "";
-      rootTasks.forEach(task => {
+      rootTasks.forEach((task) => {
         output += formatTask(task) + "\n";
-        const children = subtasks.filter(t => t.parentId === task.id);
-        children.forEach(child => {
+        const children = subtasks.filter((t) => t.parentId === task.id);
+        children.forEach((child) => {
           output += formatTask(child, "  ") + "\n";
         });
       });
@@ -238,13 +390,13 @@ export async function handleTodoListTool(
 
     case "next": {
       const actionable = todoList.getActionableTasks();
-      
+
       if (actionable.length === 0) {
         const inProgress = todoList.getByStatus("in_progress");
         if (inProgress.length > 0) {
-          return `No new tasks available. Current tasks in progress:\n${
-            inProgress.map(t => `🔄 ${t.content}`).join("\n")
-          }`;
+          return `No new tasks available. Current tasks in progress:\n${inProgress
+            .map((t) => `🔄 ${t.content}`)
+            .join("\n")}`;
         }
         return "No actionable tasks available. All tasks are either completed, in progress, or blocked.";
       }
@@ -258,9 +410,9 @@ export async function handleTodoListTool(
           critical: "🔴",
           high: "🟠",
           medium: "🟡",
-          low: "🟢"
+          low: "🟢",
         }[task.priority];
-        
+
         return `${priorityEmoji} [${task.id.slice(0, 8)}] ${task.content}`;
       };
 
@@ -268,16 +420,17 @@ export async function handleTodoListTool(
     }
 
     case "add_dependency": {
-      if (!id || !dependsOnId) {
-        return "Error: id and dependsOnId are required for add_dependency action";
-      }
+      // Validation already done in validateTodoArgs
       try {
-        const success = await todoList.addDependency(id, dependsOnId);
+        const success = await todoList.addDependency(
+          id as string,
+          dependsOnId as string,
+        );
         if (!success) {
           return "One or both tasks not found";
         }
-        const task = todoList.get(id);
-        const dependency = todoList.get(dependsOnId);
+        const task = todoList.get(id as string);
+        const dependency = todoList.get(dependsOnId as string);
         return `Added dependency: "${task?.content}" now depends on "${dependency?.content}"`;
       } catch (error) {
         return `Error adding dependency: ${error instanceof Error ? error.message : String(error)}`;

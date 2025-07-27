@@ -294,7 +294,10 @@ const createCompletion = (openai: OpenAI, input: ResponseCreateInput) => {
     ...(webSearchOptions ? { web_search_options: webSearchOptions } : {}),
     temperature: input.temperature,
     top_p: input.top_p,
-    tool_choice: input.tool_choice === undefined ? "auto" : input.tool_choice as OpenAI.Chat.Completions.ChatCompletionToolChoiceOption,
+    tool_choice:
+      input.tool_choice === undefined
+        ? "auto"
+        : (input.tool_choice as OpenAI.Chat.Completions.ChatCompletionToolChoiceOption),
     stream: input.stream || false,
     user: input.user,
     metadata: input.metadata,
@@ -336,7 +339,9 @@ async function responsesCreateViaChatCompletions(
   // SDK defaults to "https://api.openai.com/v1" which satisfies the
   // first-party check below.
 
-  const baseURL = (openai as unknown as { baseURL?: string }).baseURL || "https://api.openai.com/v1";
+  const baseURL =
+    (openai as unknown as { baseURL?: string }).baseURL ||
+    "https://api.openai.com/v1";
 
   const isFirstPartyOpenAI = /api\.openai\.com/i.test(baseURL);
   const isAzureOpenAI = /\.openai\.azure\.com/i.test(baseURL);

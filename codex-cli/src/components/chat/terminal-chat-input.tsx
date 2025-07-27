@@ -501,10 +501,13 @@ export default function TerminalChatInput({
         setInput("");
         openDiffOverlay();
         return;
-      } else if (inputValue === "/compact" || inputValue.startsWith("/compact ")) {
+      } else if (
+        inputValue === "/compact" ||
+        inputValue.startsWith("/compact ")
+      ) {
         setInput("");
         // Extract custom instructions if provided
-        const customInstructions = inputValue.startsWith("/compact ") 
+        const customInstructions = inputValue.startsWith("/compact ")
           ? inputValue.substring("/compact ".length).trim()
           : undefined;
         onCompact(customInstructions);

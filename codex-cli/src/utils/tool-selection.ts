@@ -268,6 +268,128 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
 };
 
 /**
+ * Analyze semantic complexity of a query to determine tool requirements
+ */
+function analyzeSemanticComplexity(query: string): {
+  score: number;
+  requiresTodo: boolean;
+  requiresScratchpad: boolean;
+  patterns: Array<string>;
+} {
+  const patterns: Array<string> = [];
+  let score = 0;
+
+  // Sequential/procedural patterns
+  const sequentialPatterns = [
+    {
+      pattern: /\b(and then|after that|next|finally|subsequently)\b/gi,
+      weight: 3,
+      name: "sequential",
+    },
+    {
+      pattern: /\b(step \d+|first|second|third|fourth|lastly)\b/gi,
+      weight: 5,
+      name: "numbered_steps",
+    },
+    { pattern: /\b(phase|stage|part)\s+\d+\b/gi, weight: 4, name: "phases" },
+  ];
+
+  // Task complexity patterns
+  const complexityPatterns = [
+    {
+      pattern:
+        /\b(implement|build|create|develop|design|refactor)\b.*\b(feature|system|component|module|service|api)\b/gi,
+      weight: 5,
+      name: "implementation",
+    },
+    {
+      pattern: /\b(ensure|verify|check|test|validate|confirm)\b/gi,
+      weight: 2,
+      name: "verification",
+    },
+    {
+      pattern: /\b(track|monitor|observe|watch|maintain)\b/gi,
+      weight: 3,
+      name: "tracking",
+    },
+    {
+      pattern: /\b(debug|investigate|analyze|diagnose|troubleshoot)\b/gi,
+      weight: 4,
+      name: "debugging",
+    },
+    {
+      pattern:
+        /\b(fix|solve|resolve|patch|repair)\s+\b(bug|issue|problem|error)\b/gi,
+      weight: 4,
+      name: "bug_fix",
+    },
+  ];
+
+  // Multi-component patterns
+  const multiComponentPatterns = [
+    {
+      pattern:
+        /\b(multiple|several|various|all|each|every)\s+\b(files?|components?|modules?|functions?)\b/gi,
+      weight: 4,
+      name: "multiple_items",
+    },
+    {
+      pattern:
+        /\b(across|throughout|within)\s+\b(the\s+)?(codebase|project|repository|system)\b/gi,
+      weight: 3,
+      name: "codebase_wide",
+    },
+  ];
+
+  // Check all patterns
+  const allPatterns = [
+    ...sequentialPatterns,
+    ...complexityPatterns,
+    ...multiComponentPatterns,
+  ];
+
+  for (const { pattern, weight, name } of allPatterns) {
+    const matches = query.match(pattern);
+    if (matches) {
+      score += matches.length * weight;
+      patterns.push(name);
+    }
+  }
+
+  // Check for numbered lists or bullet points
+  if (/\d+\.|\d+\)|•|-\s|\*\s/g.test(query)) {
+    score += 5;
+    patterns.push("list_format");
+  }
+
+  // Long queries likely indicate complexity
+  const wordCount = query.split(/\s+/).length;
+  if (wordCount > 30) {
+    score += 5;
+    patterns.push("long_query");
+  } else if (wordCount > 20) {
+    score += 3;
+    patterns.push("medium_query");
+  }
+
+  // Determine tool requirements based on patterns
+  const requiresTodo =
+    score >= 10 ||
+    patterns.includes("numbered_steps") ||
+    patterns.includes("implementation") ||
+    patterns.includes("multiple_items") ||
+    patterns.includes("list_format");
+
+  const requiresScratchpad =
+    score >= 8 ||
+    patterns.includes("debugging") ||
+    patterns.includes("tracking") ||
+    patterns.includes("codebase_wide");
+
+  return { score, requiresTodo, requiresScratchpad, patterns };
+}
+
+/**
  * Simple keyword-based scoring for tool relevance
  * In a production system, this could use embeddings for better accuracy
  */
@@ -296,6 +418,45 @@ function scoreToolRelevance(query: string, metadata: ToolMetadata): number {
   // Boost score if tool name is mentioned (for function tools)
   if ("name" in metadata.tool && queryLower.includes(metadata.tool.name)) {
     score += 5;
+  }
+
+  // ENHANCED: Use semantic complexity analysis
+  const complexity = analyzeSemanticComplexity(query);
+
+  // Force selection of required tools based on complexity
+  if ("name" in metadata.tool) {
+    if (metadata.tool.name === "todo_list" && complexity.requiresTodo) {
+      score += 100; // Guarantee selection
+    } else if (
+      metadata.tool.name === "scratchpad" &&
+      complexity.requiresScratchpad
+    ) {
+      score += 90; // Very high priority
+    }
+  }
+
+  // Additional boost based on complexity score
+  if (complexity.score >= 15) {
+    if (metadata.category === "organization") {
+      score += 20;
+    }
+    if (metadata.category === "memory") {
+      score += 15;
+    }
+  } else if (complexity.score >= 10) {
+    if (metadata.category === "organization") {
+      score += 15;
+    }
+    if (metadata.category === "memory") {
+      score += 10;
+    }
+  } else if (complexity.score >= 5) {
+    if (metadata.category === "organization") {
+      score += 10;
+    }
+    if (metadata.category === "memory") {
+      score += 5;
+    }
   }
 
   // Category-based heuristics
@@ -332,17 +493,28 @@ function scoreToolRelevance(query: string, metadata: ToolMetadata): number {
         /(implement|build|create|develop|fix|refactor|analyze)\s+.*(feature|function|component|system|bug)/,
       )
     ) {
-      score += 3;
+      score += 5;
     }
     if (queryLower.match(/(step|phase|stage|part|section)\s*\d+/)) {
-      score += 2;
+      score += 3;
     }
     if (
       queryLower.includes("let's") ||
       queryLower.includes("we need to") ||
-      queryLower.includes("first")
+      queryLower.includes("first") ||
+      queryLower.includes("help me")
     ) {
-      score += 1;
+      score += 2;
+    }
+  }
+
+  if (metadata.category === "memory") {
+    // Boost scratchpad for debugging/analysis patterns
+    if (queryLower.match(/debug|investigate|analyze|trace|track|find.*issue/)) {
+      score += 5;
+    }
+    if (queryLower.match(/error|exception|crash|fail|broken|not work/)) {
+      score += 4;
     }
   }
 
@@ -381,6 +553,37 @@ export function selectToolsForQuery(
   }
 
   return selected;
+}
+
+/**
+ * Analyze a query and determine which tools should be required
+ */
+export function getRequiredTools(query: string): {
+  required: Array<string>;
+  recommended: Array<string>;
+  complexity: ReturnType<typeof analyzeSemanticComplexity>;
+} {
+  const complexity = analyzeSemanticComplexity(query);
+  const required: Array<string> = [];
+  const recommended: Array<string> = [];
+
+  if (complexity.requiresTodo) {
+    required.push("todo_list");
+  }
+
+  if (complexity.requiresScratchpad) {
+    required.push("scratchpad");
+  }
+
+  // Always recommend shell for implementation tasks
+  if (
+    complexity.patterns.includes("implementation") ||
+    complexity.patterns.includes("bug_fix")
+  ) {
+    recommended.push("shell");
+  }
+
+  return { required, recommended, complexity };
 }
 
 /**

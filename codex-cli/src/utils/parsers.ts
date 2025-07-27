@@ -24,21 +24,15 @@ function attemptJSONRepair(jsonStr: string): string {
       const valuePart1 = p3;
       const valuePart2 = p5;
       return `"${key}": "${valuePart1}\\n${valuePart2}"`;
-    }
+    },
   );
-  
+
   // Handle multiline content in todo_list and scratchpad content fields
-  repaired = repaired.replace(
-    /("content"\s*:\s*"[^"]*)\n([^"]*")/g,
-    '$1\\n$2'
-  );
-  
+  repaired = repaired.replace(/("content"\s*:\s*"[^"]*)\n([^"]*")/g, "$1\\n$2");
+
   // Handle other common newlines in values
-  repaired = repaired.replace(
-    /:\s*"([^"]*)\n([^"]*)"/g,
-    ': "$1\\n$2"'
-  );
-  
+  repaired = repaired.replace(/:\s*"([^"]*)\n([^"]*)"/g, ': "$1\\n$2"');
+
   return repaired;
 }
 

@@ -50,7 +50,7 @@ const TOOL_REGISTRY: Record<string, ToolInfo> = {
     name: "todo_list",
     category: "organization",
     description:
-      "Manage tasks with priorities, dependencies, and progress tracking",
+      "Manage tasks with priorities, dependencies, and progress tracking. NOTE: This is a FUNCTION TOOL, not a shell command!",
     parameters:
       '{"action": "add|list|complete|start|...", "content"?: "task", "id"?: "task-id", "priority"?: "low|medium|high"}',
   },
@@ -172,7 +172,7 @@ const TOOL_EXAMPLES: Record<
 /**
  * Handle tools_info tool calls
  */
-interface ToolsInfoArgs {
+export interface ToolsInfoArgs {
   action: "list" | "describe" | "examples";
   tool_name?: string;
 }
