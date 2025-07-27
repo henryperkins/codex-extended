@@ -1,5 +1,7 @@
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 
+import { scratchpadTool } from "./scratchpad-tool.js";
+
 /**
  * Tool discovery and information tool
  */
@@ -53,11 +55,12 @@ const TOOL_REGISTRY: Record<string, ToolInfo> = {
       '{"action": "add|list|complete|start|...", "content"?: "task", "id"?: "task-id", "priority"?: "low|medium|high"}',
   },
   scratchpad: {
-    name: "scratchpad",
+    name: scratchpadTool.name,
     category: "memory",
-    description: "Store and retrieve notes, plans, and intermediate results",
-    parameters:
-      '{"action": "write|read|update|delete|summarize", "content"?: "text", "category"?: "note|plan|result", "id"?: "entry-id"}',
+    description: scratchpadTool.description ?? "Scratchpad tool",
+    parameters: scratchpadTool.parameters
+      ? JSON.stringify(scratchpadTool.parameters)
+      : undefined,
   },
   fetch_url: {
     name: "fetch_url",

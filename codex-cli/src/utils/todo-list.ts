@@ -377,8 +377,25 @@ export class TodoList {
       const content = readFileSync(this.filePath, "utf-8");
       const data = JSON.parse(content);
 
-      if (data.version === 1 && Array.isArray(data.todos)) {
-        this.todos = new Map(data.todos);
+      if (
+        data.version === 1 &&
+        Array.isArray(data.todos) &&
+        data.todos.every(
+          (pair: unknown) =>
+            Array.isArray(pair) &&
+            pair.length === 2 &&
+            typeof pair[0] === "string" &&
+            typeof pair[1] === "object" &&
+            pair[1] != null &&
+            typeof (pair[1] as Record<string, unknown>)["content"] ===
+              "string" &&
+            typeof (pair[1] as Record<string, unknown>)["status"] === "string",
+        )
+      ) {
+        this.todos = new Map(data.todos as Array<[string, TodoItem]>);
+      } else {
+        // Invalid format, skip loading
+        return;
       }
     } catch (error) {
       // Failed to load todo list

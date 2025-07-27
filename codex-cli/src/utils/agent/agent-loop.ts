@@ -58,6 +58,7 @@ import { handleExecCommand } from "./handle-exec-command.js";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { join } from "node:path";
 import OpenAI, { APIConnectionTimeoutError, AzureOpenAI } from "openai";
 import os from "os";
@@ -427,9 +428,14 @@ export class AgentLoop {
       // Ignore errors loading previous scratchpad
     });
 
-    // Initialize todo list for this session
+    // Initialize todo list for this session (persist under ~/.codex/todos)
+    const todoSaveDir = join(os.homedir(), ".codex", "todos");
+    // Ensure directory exists (non-blocking, ignore errors)
+    void fs.mkdir(todoSaveDir, { recursive: true }).catch(() => {
+      /* ignore mkdir errors – fallback to tmp */
+    });
     this.todoList = new TodoList({
-      filePath: join(os.tmpdir(), `codex-todo-${this.sessionId}.json`),
+      filePath: join(todoSaveDir, `codex-todo-${this.sessionId}.json`),
       autoSave: true,
     });
     // Configure OpenAI client with optional timeout (ms) from environment

@@ -3,6 +3,7 @@ import type {
   FunctionTool,
 } from "openai/resources/responses/responses.mjs";
 
+import { scratchpadTool } from "./scratchpad-tool.js";
 import { todoListTool } from "./todo-list-tool.js";
 
 /**
@@ -60,47 +61,7 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
   },
 
   scratchpad: {
-    tool: {
-      type: "function",
-      name: "scratchpad",
-      description:
-        "Read and write to a persistent scratchpad for storing notes, plans, intermediate results, and state during task execution.",
-      strict: false,
-      parameters: {
-        type: "object",
-        properties: {
-          action: {
-            type: "string",
-            enum: ["write", "read", "update", "delete", "clear", "summarize"],
-            description: "The action to perform on the scratchpad",
-          },
-          content: {
-            type: "string",
-            description: "Content to write or update",
-          },
-          category: {
-            type: "string",
-            enum: ["note", "plan", "result", "error", "state"],
-            description: "Category of the entry",
-          },
-          id: {
-            type: "string",
-            description: "Entry ID for update/delete",
-          },
-          options: {
-            type: "object",
-            properties: {
-              category: { type: "string" },
-              limit: { type: "number" },
-              search: { type: "string" },
-            },
-            additionalProperties: false,
-          },
-        },
-        required: ["action"],
-        additionalProperties: false,
-      },
-    } as FunctionTool,
+    tool: scratchpadTool,
     keywords: [
       "remember",
       "save",

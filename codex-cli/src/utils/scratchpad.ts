@@ -235,11 +235,24 @@ export class Scratchpad {
 
       if (
         parsed.sessionId === this.sessionId &&
-        Array.isArray(parsed.entries)
+        Array.isArray(parsed.entries) &&
+        parsed.entries.every(
+          (e: unknown) =>
+            typeof e === "object" &&
+            e != null &&
+            typeof (e as Record<string, unknown>)["id"] === "string" &&
+            typeof (e as Record<string, unknown>)["timestamp"] === "number" &&
+            typeof (e as Record<string, unknown>)["category"] === "string" &&
+            typeof (e as Record<string, unknown>)["content"] === "string",
+        )
       ) {
-        this.entries = parsed.entries;
-        log(`Scratchpad: Loaded ${this.entries.length} entries from disk`);
+        this.entries = parsed.entries as Array<ScratchpadEntry>;
+        log(
+          `Scratchpad: Loaded ${this.entries.length} valid entries from disk`,
+        );
         return true;
+      } else {
+        log("Scratchpad: Invalid data format detected, ignoring file");
       }
     } catch (error) {
       // File doesn't exist or is invalid, start fresh
